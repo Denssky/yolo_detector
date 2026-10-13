@@ -22,6 +22,7 @@ INPUT_SIZE      = (416, 416)
 DEFAULT_CONF    = 0.4
 DEFAULT_NMS     = 0.4
 DEFAULT_CLASSES = ("truck",)
+
 CLASS_PRESETS = {
     "truck":   ("truck",),
     "traffic": ("person", "car", "bus", "truck", "motorcycle", "bicycle",
@@ -30,12 +31,32 @@ CLASS_PRESETS = {
                 "cell phone", "book", "clock", "cup"),
     "food":    ("banana", "apple", "sandwich", "orange", "pizza",
                 "donut", "cake", "bottle", "cup", "bowl", "fork", "knife"),
-    "all":     (),   # пустой = все 80 классов
+    "all":     (),
 }
 
-BOX_COLOR   = (0, 255, 0)
 TEXT_COLOR  = (0, 0, 0)
 COUNT_COLOR = (0, 0, 255)
+DEFAULT_BOX_COLOR = (0, 255, 0)
+
+CLASS_PALETTE = [
+    (0, 255, 0),
+    (0, 165, 255),
+    (255, 0, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (255, 0, 255),
+    (0, 255, 255),
+    (128, 0, 128),
+    (0, 128, 255),
+    (128, 128, 0),
+    (0, 128, 0),
+    (203, 192, 255),
+]
+
+
+def color_for_class(class_id: int) -> tuple:
+    return CLASS_PALETTE[class_id % len(CLASS_PALETTE)]
+
 
 @dataclass
 class Detection:
@@ -102,6 +123,14 @@ class YoloDetector:
         per_image_class_ids: List[List[int]] = [[] for _ in range(batch_size)]
 
         for out in outs:
+            # --- Нормализация формы выхода к (N, 85) ---
+            if out.ndim != 2:
+                out = out.reshape(out.shape[0], -1)
+            if out.shape[1] != 85 and out.shape[0] == 85:
+                out = out.T
+            if out.shape[1] != 85:
+                continue
+
             rows = out.shape[0]
             if rows % batch_size != 0:
                 continue
@@ -109,16 +138,16 @@ class YoloDetector:
 
             for b in range(batch_size):
                 h, w = orig_sizes[b]
-                chunk = out[b * anchors:(b + 1) * anchors]
+                chunk = out[b * anchors:(b + 1) * anchors]  # (anchors, 85)
 
-                class_scores = chunk[:, 5:]
-                class_ids = np.argmax(class_scores, axis=1)
+                class_scores = chunk[:, 5:]                 # (anchors, 80)
+                class_ids = np.argmax(class_scores, axis=1) # (anchors,)
                 scores = class_scores[np.arange(len(class_ids)), class_ids]
-                mask = scores >= self.conf_threshold
+                mask = scores >= self.conf_threshold        # (anchors,)
                 if not mask.any():
                     continue
 
-                det = chunk[mask]
+                det = chunk[mask]                           # (kept, 85)
                 cls = class_ids[mask]
                 sc = scores[mask]
 
@@ -187,15 +216,16 @@ class YoloDetector:
 
 def draw_detections(image: np.ndarray, detections: List[Detection]) -> np.ndarray:
     for d in detections:
-        cv2.rectangle(image, (d.x1, d.y1), (d.x2, d.y2), BOX_COLOR, 2)
+        color = color_for_class(d.class_id)
+        cv2.rectangle(image, (d.x1, d.y1), (d.x2, d.y2), color, 2)
         label = f"{d.class_name} {d.score:.2f}"
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         cv2.rectangle(image, (d.x1, d.y1 - th - base),
-                      (d.x1 + tw, d.y1), BOX_COLOR, -1)
+                      (d.x1 + tw, d.y1), color, -1)
         cv2.putText(image, label, (d.x1, d.y1 - base),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, TEXT_COLOR, 2, cv2.LINE_AA)
 
-    cv2.putText(image, f"Trucks found: {len(detections)}", (10, 30),
+    cv2.putText(image, f"Detections: {len(detections)}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, COUNT_COLOR, 2, cv2.LINE_AA)
     return image
 
@@ -225,7 +255,7 @@ def collect_images(paths: Iterable[str]) -> List[str]:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="YOLOv4-tiny truck detector (images)")
+    p = argparse.ArgumentParser(description="YOLOv4-tiny object detector (images)")
     p.add_argument("inputs", nargs="*", default=["images/trucks.jpg"],
                    help="файлы, папки или glob-паттерны "
                         "(по умолчанию: images/trucks.jpg)")
@@ -281,7 +311,7 @@ def main():
         input_size=INPUT_SIZE,
         conf_threshold=args.conf,
         nms_threshold=args.nms,
-        classes_of_interest=tuple(args.classes),
+        classes_of_interest=tuple(classes),
         batch_size=args.batch_size,
     ))
     total_time = 0.0
@@ -343,10 +373,14 @@ def main():
           f"({total_time / max(report.meta.total_images, 1):.1f} ms/img)")
     print(f"JSON: {saved}")
 
-    if not args.no_show and last_result is not None:
+    if args.show and last_result is not None:
         cv2.imshow("YOLOv4-tiny", last_result)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        try:
+            cv2.waitKey(0)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
