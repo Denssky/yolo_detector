@@ -5,6 +5,7 @@ import glob
 import argparse
 from dataclasses import dataclass
 from typing import List, Tuple, Iterable, Sequence
+from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -123,7 +124,6 @@ class YoloDetector:
         per_image_class_ids: List[List[int]] = [[] for _ in range(batch_size)]
 
         for out in outs:
-            # --- Нормализация формы выхода к (N, 85) ---
             if out.ndim != 2:
                 out = out.reshape(out.shape[0], -1)
             if out.shape[1] != 85 and out.shape[0] == 85:
@@ -138,16 +138,16 @@ class YoloDetector:
 
             for b in range(batch_size):
                 h, w = orig_sizes[b]
-                chunk = out[b * anchors:(b + 1) * anchors]  # (anchors, 85)
+                chunk = out[b * anchors:(b + 1) * anchors]
 
-                class_scores = chunk[:, 5:]                 # (anchors, 80)
-                class_ids = np.argmax(class_scores, axis=1) # (anchors,)
+                class_scores = chunk[:, 5:]
+                class_ids = np.argmax(class_scores, axis=1)
                 scores = class_scores[np.arange(len(class_ids)), class_ids]
-                mask = scores >= self.conf_threshold        # (anchors,)
+                mask = scores >= self.conf_threshold
                 if not mask.any():
                     continue
 
-                det = chunk[mask]                           # (kept, 85)
+                det = chunk[mask]
                 cls = class_ids[mask]
                 sc = scores[mask]
 
@@ -230,6 +230,50 @@ def draw_detections(image: np.ndarray, detections: List[Detection]) -> np.ndarra
     return image
 
 
+def save_crops(image: np.ndarray,
+               detections: List[Detection],
+               src_name: str,
+               crops_dir: str,
+               counter: dict) -> int:
+    """
+    Сохраняет вырезанные объекты в crops_dir.
+    Имя файла: {stem}_{class_slug}_{номер:03d}.jpg
+    counter — словарь {(stem, class_slug): int} для сквозной нумерации.
+    Возвращает количество сохранённых кропов.
+    """
+    if not detections:
+        return 0
+
+    os.makedirs(crops_dir, exist_ok=True)
+    stem = os.path.splitext(src_name)[0]
+    h_img, w_img = image.shape[:2]
+    saved = 0
+
+    for d in detections:
+        x1 = max(0, d.x1)
+        y1 = max(0, d.y1)
+        x2 = min(w_img, d.x2)
+        y2 = min(h_img, d.y2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        crop = image[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
+
+        class_slug = d.class_name.replace(" ", "_")
+        key = (stem, class_slug)
+        counter[key] = counter.get(key, 0) + 1
+        num = counter[key]
+
+        fname = f"{stem}_{class_slug}_{num:03d}.jpg"
+        out_path = os.path.join(crops_dir, fname)
+        cv2.imwrite(out_path, crop)
+        saved += 1
+
+    return saved
+
+
 def collect_images(paths: Iterable[str]) -> List[str]:
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
     found: List[str] = []
@@ -272,12 +316,58 @@ def parse_args():
     p.add_argument("--show", action="store_true",
                    help="открыть окно с результатом (по умолчанию — нет)")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--save-crops", action="store_true",
+                   help="сохранять вырезанные объекты в <output-dir>/crops")
+    p.add_argument("--crops-dir", default=None,
+                   help="папка для кропов (по умолчанию <output-dir>/crops)")
     return p.parse_args()
 
 
 def chunked(seq, n):
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
+
+
+def browse_results(results: List[Tuple[str, np.ndarray]],
+                   window_name: str = "YOLOv4-tiny") -> None:
+    """
+    Пролистывание аннотированных изображений.
+    Управление:
+      D / Space / ] — следующее
+      A / [         — предыдущее
+      Q / Esc       — выход
+    """
+    n = len(results)
+    idx = 0
+    print(f"\nПросмотр {n} изображений. "
+          f"A/[ — назад, D/]/Space — вперёд, Q — выход.")
+
+    while True:
+        name, img = results[idx]
+        display = img.copy()
+        hud = f"[{idx + 1}/{n}]  {name}"
+        y = display.shape[0] - 15
+        cv2.putText(display, hud, (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(display, hud, (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (255, 255, 255), 2, cv2.LINE_AA)
+
+        cv2.imshow(window_name, display)
+        key = cv2.waitKey(0)
+        if key == -1:
+            continue
+        low = key & 0xFF
+
+        if low in (ord("q"), ord("Q"), 27):
+            break
+        if low in (ord("d"), ord("D"), 32, ord("]")):
+            idx = (idx + 1) % n
+        elif low in (ord("a"), ord("A"), ord("[")):
+            idx = (idx - 1) % n
+
+    cv2.destroyAllWindows()
 
 
 def main():
@@ -306,6 +396,13 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
+    crops_dir = args.crops_dir or os.path.join(args.output_dir, "crops")
+    crops_counter: dict = {}
+    total_crops = 0
+    if args.save_crops:
+        os.makedirs(crops_dir, exist_ok=True)
+        print(f"Кропы: {crops_dir}")
+
     report = ReportBuilder(meta=ReportMeta(
         model=os.path.basename(MODEL_DIR),
         input_size=INPUT_SIZE,
@@ -315,53 +412,73 @@ def main():
         batch_size=args.batch_size,
     ))
     total_time = 0.0
-    last_result = None
+    saved_results: List[Tuple[str, np.ndarray]] = []
 
-    for batch_idx, batch_files in enumerate(chunked(files, args.batch_size), 1):
-        images, valid_files = [], []
-        for f in batch_files:
-            img = cv2.imread(f)
-            if img is None:
-                print(f"[warn] не удалось прочитать: {f}", file=sys.stderr)
-                continue
-            images.append(img)
-            valid_files.append(f)
-
-        if not images:
+    # --- Загружаем все изображения один раз, группируем по размеру ---
+    by_size: dict = defaultdict(list)   # (h, w) -> [(path, img), ...]
+    for f in files:
+        img = cv2.imread(f)
+        if img is None:
+            print(f"[warn] не удалось прочитать: {f}", file=sys.stderr)
             continue
+        by_size[img.shape[:2]].append((f, img))
 
-        t0 = time.perf_counter()
-        batch_dets = detector.detect_batch(images)
-        dt_batch = (time.perf_counter() - t0) * 1000
-        total_time += dt_batch
-        per_img_ms = dt_batch / len(images)
+    if not by_size:
+        print("Не удалось прочитать ни одного изображения.", file=sys.stderr)
+        sys.exit(1)
 
-        print(f"[batch {batch_idx}] {len(images)} img  "
-              f"{dt_batch:.1f} ms total  ({per_img_ms:.1f} ms/img)")
+    n_groups = len(by_size)
+    sizes_info = ", ".join(f"{h}x{w}: {len(v)}"
+                           for (h, w), v in by_size.items())
+    print(f"Групп по размеру: {n_groups} ({sizes_info})")
 
-        for f, img, dets in zip(valid_files, images, batch_dets):
-            h, w = img.shape[:2]
-            name = os.path.basename(f)
-            print(f"  {name:<30} найдено: {len(dets)}")
+    batch_idx = 0
+    for (grp_h, grp_w), items in by_size.items():
+        for batch_files in chunked(items, args.batch_size):
+            batch_idx += 1
+            valid_files = [f for f, _ in batch_files]
+            images = [img for _, img in batch_files]
 
-            if args.verbose:
-                for d in sorted(dets, key=lambda x: -x.score):
-                    print(f"      {d.class_name:<12} "
-                          f"score={d.score:.3f} box={d.box}")
+            t0 = time.perf_counter()
+            batch_dets = detector.detect_batch(images)
+            dt_batch = (time.perf_counter() - t0) * 1000
+            total_time += dt_batch
+            per_img_ms = dt_batch / len(images)
 
-            result = draw_detections(img, dets)
-            out_path = os.path.join(args.output_dir, name)
-            cv2.imwrite(out_path, result)
-            last_result = result
+            print(f"[batch {batch_idx}] group {grp_h}x{grp_w}  "
+                  f"{len(images)} img  "
+                  f"{dt_batch:.1f} ms total  ({per_img_ms:.1f} ms/img)")
 
-            report.add_image(ImageRecord(
-                path=f,
-                output=out_path,
-                width=w,
-                height=h,
-                inference_ms=per_img_ms,
-                detections=[detection_to_dict(d) for d in dets],
-            ))
+            for f, img, dets in zip(valid_files, images, batch_dets):
+                h, w = img.shape[:2]
+                name = os.path.basename(f)
+                print(f"  {name:<30} найдено: {len(dets)}")
+
+                if args.verbose:
+                    for d in sorted(dets, key=lambda x: -x.score):
+                        print(f"      {d.class_name:<12} "
+                              f"score={d.score:.3f} box={d.box}")
+
+                result = draw_detections(img, dets)
+                out_path = os.path.join(args.output_dir, name)
+                cv2.imwrite(out_path, result)
+                saved_results.append((name, result))
+
+                if args.save_crops:
+                    total_crops += save_crops(img, dets, name,
+                                              crops_dir, crops_counter)
+
+                report.add_image(ImageRecord(
+                    path=f,
+                    output=out_path,
+                    width=w,
+                    height=h,
+                    inference_ms=per_img_ms,
+                    detections=[detection_to_dict(d) for d in dets],
+                ))
+
+    if args.save_crops:
+        print(f"Кропов сохранено: {total_crops}")
 
     report.meta.total_time_ms = total_time
     saved = report.save(args.json)
@@ -373,13 +490,10 @@ def main():
           f"({total_time / max(report.meta.total_images, 1):.1f} ms/img)")
     print(f"JSON: {saved}")
 
-    if args.show and last_result is not None:
-        cv2.imshow("YOLOv4-tiny", last_result)
+    if args.show and saved_results:
         try:
-            cv2.waitKey(0)
+            browse_results(saved_results)
         except KeyboardInterrupt:
-            pass
-        finally:
             cv2.destroyAllWindows()
 
 
