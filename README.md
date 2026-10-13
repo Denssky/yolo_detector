@@ -56,6 +56,12 @@ python main.py images/ --show
 | `--verbose` | Печатать все детекции |
 | `--cuda` | Использовать CUDA, если доступна |
 
-## Лицензия
+## Модель
 
+Скачайте YOLOv4-tiny и положите в `yolo_tiny/`:
+- https://github.com/AlexeyAB/darknet/releases/download/yolov4/yolov4-tiny.weights
+- https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-tiny.cfg
+- https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names
+## Лицензия
+github.com/AlexeyAB/darknet
 MIT
