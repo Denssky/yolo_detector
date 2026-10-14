@@ -13,7 +13,7 @@
 pip install opencv-python numpy
 
 # 2. Скачать модель YOLOv4-tiny в папку yolo_tiny/
-#    (ссылки — в разделе «Модель»)
+#    (ссылки — в разделе «Установка»)
 
 # 3. Запустить на тестовом изображении
 python main.py images/trucks.jpg
@@ -100,13 +100,6 @@ python main.py images/ --preset traffic --save-crops
 # Результат: output/crops/trucks_truck_001.jpg, ...
 ```
 
-### Детекция лиц (опционально)
-
-```bash
-python main.py images/ --faces
-python main.py images/ --preset traffic --faces --face-conf 0.8
-```
-
 ### Просмотр результатов
 
 ```bash
@@ -150,9 +143,6 @@ python main.py images/ --verbose
 | `--csv` | Путь к CSV (пустая строка — отключить) | `output/detections.csv` |
 | `--save-crops` | Сохранять кропы объектов | выкл. |
 | `--crops-dir` | Папка для кропов | `<output-dir>/crops` |
-| `--faces` | Детектировать лица через YuNet | выкл. |
-| `--face-model` | Путь к ONNX-модели YuNet | `models/face_detection_yunet_2023mar.onnx` |
-| `--face-conf` | Порог уверенности для лиц | `0.7` |
 | `--show` | Открыть окно с результатом | выкл. |
 | `--verbose` | Печатать каждую детекцию | выкл. |
 | `--cuda` | Использовать CUDA | выкл. |
@@ -213,9 +203,7 @@ output/
 yolo_detector/
 ├── main.py              # точка входа, CLI, обработка изображений
 ├── json_report.py       # сборка JSON-отчёта
-├── face_detector.py     # YuNet для детекции лиц
 ├── yolo_tiny/           # модель YOLO (weights, cfg, coco.names)
-├── models/              # ONNX-модель YuNet
 ├── images/              # входные изображения
 └── output/              # результаты
 ```
@@ -244,7 +232,7 @@ yolo_detector/
 ## Требования
 
 - Python 3.8+
-- OpenCV 4.5.4+ (для `FaceDetectorYN`)
+- OpenCV 4.5.4+ (для будущей поддержки `FaceDetectorYN`)
 - numpy
 
 ## Лицензия
