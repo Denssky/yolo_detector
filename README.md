@@ -1,8 +1,8 @@
 # YOLO Object Detector
 
-Детекция объектов на изображениях с помощью YOLOv4-tiny и OpenCV DNN.
+Детекция объектов и лиц на изображениях с помощью YOLOv4-tiny, YuNet и OpenCV DNN.
 По умолчанию ищет грузовики, но умеет работать с любыми классами COCO
-(транспорт, люди, электроника, еда — 80 классов) и опционально — с лицами.
+(80 классов) и опционально — с лицами.
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```bash
 # 1. Установить зависимости
-pip install opencv-python numpy
+pip install opencv-python numpy matplotlib
 
 # 2. Скачать модель YOLOv4-tiny в папку yolo_tiny/
 #    (ссылки — в разделе «Установка»)
@@ -19,7 +19,7 @@ pip install opencv-python numpy
 python main.py images/trucks.jpg
 ```
 
-Результат появится в `output/trucks.jpg`. Все детекции — в `output/detections.json`.
+Результат появится в `output/trucks.jpg`. Все детекции — в `output/detections.json` и `output/detections.csv`.
 
 ---
 
@@ -28,7 +28,7 @@ python main.py images/trucks.jpg
 ### 1. Зависимости
 
 ```bash
-pip install opencv-python numpy
+pip install opencv-python numpy matplotlib
 ```
 
 Python 3.8+ обязателен. Для CUDA-инференса (опционально) нужна сборка OpenCV с CUDA.
@@ -52,12 +52,16 @@ Invoke-WebRequest "https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg
 Invoke-WebRequest "https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names" -OutFile "yolo_tiny\coco.names"
 ```
 
-### 3. Модель YuNet (опционально, для детекции лиц)
+### 3. Модель YuNet (только для детекции лиц)
+
+Скачивается одной командой:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path models | Out-Null
 Invoke-WebRequest "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" -OutFile "models\face_detection_yunet_2023mar.onnx"
 ```
+
+Опционально — без неё работает всё, кроме `--faces`.
 
 ---
 
@@ -100,6 +104,28 @@ python main.py images/ --preset traffic --save-crops
 # Результат: output/crops/trucks_truck_001.jpg, ...
 ```
 
+При `--faces` кропы лиц сохраняются с суффиксом `_face_NNN.jpg`.
+
+### Детекция лиц
+
+```bash
+python main.py images/ --faces
+python main.py images/ --preset traffic --faces --face-conf 0.9
+```
+
+Лица рисуются **жёлтым**, ключевые точки (глаза, нос, уголки рта) — **красным**.
+В сводке по классам появляется `face`, в JSON/CSV — тоже.
+
+### Графики результатов
+
+```bash
+python main.py images/ --preset traffic --plots
+# Результат: output/report.png
+```
+
+Четыре графика в сетке 2×2: объекты по классам, распределение score,
+размеры боксов, средний score по классам.
+
 ### Просмотр результатов
 
 ```bash
@@ -113,17 +139,10 @@ python main.py images/ --show
 ### Тонкая настройка
 
 ```bash
-# Снизить порог уверенности — больше детекций, но и ложных тоже
-python main.py images/ --conf 0.2
-
-# Изменить размер батча
-python main.py images/ --batch-size 16
-
-# CUDA (если OpenCV собран с поддержкой)
-python main.py images/ --cuda
-
-# Печатать каждую детекцию
-python main.py images/ --verbose
+python main.py images/ --conf 0.2                # больше детекций
+python main.py images/ --batch-size 16           # размер батча
+python main.py images/ --cuda                    # GPU, если доступна
+python main.py images/ --verbose                 # печатать каждую детекцию
 ```
 
 ---
@@ -133,7 +152,7 @@ python main.py images/ --verbose
 | Флаг | Описание | По умолчанию |
 |---|---|---|
 | `inputs` | Файлы, папки или glob-паттерны | `images/trucks.jpg` |
-| `--preset` | Готовый набор классов (`truck`, `traffic`, `office`, `food`, `all`) | — |
+| `--preset` | Готовый набор классов | — |
 | `--classes` | Произвольный список классов COCO | `truck` |
 | `--conf` | Порог уверенности | `0.4` |
 | `--nms` | Порог NMS | `0.4` |
@@ -141,8 +160,13 @@ python main.py images/ --verbose
 | `--output-dir` | Куда сохранять результаты | `output` |
 | `--json` | Путь к сводному JSON | `output/detections.json` |
 | `--csv` | Путь к CSV (пустая строка — отключить) | `output/detections.csv` |
-| `--save-crops` | Сохранять кропы объектов | выкл. |
+| `--save-crops` | Сохранять кропы объектов и лиц | выкл. |
 | `--crops-dir` | Папка для кропов | `<output-dir>/crops` |
+| `--faces` | Детектировать лица через YuNet | выкл. |
+| `--face-model` | Путь к ONNX-модели YuNet | `models/face_detection_yunet_2023mar.onnx` |
+| `--face-conf` | Порог уверенности для лиц | `0.7` |
+| `--plots` | Построить графики в PNG | выкл. |
+| `--plots-path` | Куда сохранять PNG с графиками | `output/report.png` |
 | `--show` | Открыть окно с результатом | выкл. |
 | `--verbose` | Печатать каждую детекцию | выкл. |
 | `--cuda` | Использовать CUDA | выкл. |
@@ -156,10 +180,11 @@ output/
 ├── trucks.jpg              # аннотированное изображение
 ├── detections.json         # полный отчёт: метаданные + все детекции
 ├── detections.csv          # плоская таблица для Excel / pandas
+├── report.png              # графики (если --plots)
 └── crops/                  # кропы объектов (если --save-crops)
     ├── trucks_truck_001.jpg
     ├── trucks_truck_002.jpg
-    └── ...
+    └── lena_face_001.jpg
 ```
 
 **Формат JSON:**
@@ -186,6 +211,13 @@ output/
           "score": 0.9721,
           "box": {"x": 661, "y": 371, "w": 139, "h": 153},
           "xyxy": [661, 371, 800, 524]
+        },
+        {
+          "class_name": "face",
+          "class_id": -1,
+          "score": 0.5432,
+          "box": {"x": 207, "y": 183, "w": 146, "h": 205},
+          "xyxy": [207, 183, 353, 388]
         }
       ]
     }
@@ -203,7 +235,10 @@ output/
 yolo_detector/
 ├── main.py              # точка входа, CLI, обработка изображений
 ├── json_report.py       # сборка JSON-отчёта
+├── face_detector.py     # YuNet для детекции лиц
+├── report_plots.py      # графики matplotlib
 ├── yolo_tiny/           # модель YOLO (weights, cfg, coco.names)
+├── models/              # ONNX-модель YuNet
 ├── images/              # входные изображения
 └── output/              # результаты
 ```
@@ -227,13 +262,16 @@ yolo_detector/
 - **Бытовая техника:** `microwave`, `oven`, `toaster`, `sink`, `refrigerator`
 - **Разное:** `book`, `clock`, `vase`, `scissors`, `teddy bear`, `hair drier`, `toothbrush`
 
+**Плюс псевдо-класс `face`** (от YuNet, при `--faces`).
+
 ---
 
 ## Требования
 
 - Python 3.8+
-- OpenCV 4.5.4+ (для будущей поддержки `FaceDetectorYN`)
+- OpenCV 4.5.4+
 - numpy
+- matplotlib (для `--plots`)
 
 ## Лицензия
 
