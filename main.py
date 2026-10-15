@@ -4,17 +4,12 @@
 #   - разбор CLI-аргументов (и конфига);
 #   - координацию работы: загрузка → инференс → сохранение.
 #
-# Вся «тяжёлая» логика вынесена в модули:
-#   detector.py     — YoloDetector, Detection
-#   drawing.py      — отрисовка боксов и просмотр
-#   io_utils.py     — кропы, CSV, сводка, сбор файлов
-#   face_detector.py — YuNet
-#   json_report.py  — JSON-отчёт
-#   report_plots.py — графики matplotlib
-#   excel_report.py — Excel через openpyxl
-#   config_loader.py — настройки из JSON
+# Логирование:
+#   - прогресс и служебные сообщения → logger.info / logger.warning (stderr);
+#   - итоговые результаты → print (stdout), видны даже при --quiet.
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -41,6 +36,7 @@ from io_utils import (
     print_class_summary, collect_images,
 )
 from json_report import ReportBuilder, ReportMeta, ImageRecord, detection_to_dict
+from logger import get_logger, setup_logging
 from report_plots import save_report_plots
 
 
@@ -73,6 +69,14 @@ def build_parser():
                         "(по умолчанию: images/trucks.jpg)")
     p.add_argument("--config", default=None,
                    help="путь к JSON-файлу с настройками")
+    p.add_argument("--log-level",
+                   choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                   default="INFO",
+                   help="уровень логирования (по умолчанию INFO)")
+    p.add_argument("--log-file", default=None,
+                   help="писать лог в файл (например, output/run.log)")
+    p.add_argument("--quiet", action="store_true",
+                   help="то же, что --log-level WARNING")
     p.add_argument("--output-dir", default="output")
     p.add_argument("--json", default="output/detections.json")
     p.add_argument("--csv", default="output/detections.csv",
@@ -99,34 +103,50 @@ def build_parser():
 
 def parse_args():
     """
-    Разбор аргументов. Если указан --config, значения из JSON применяются
-    как дефолты, но CLI-флаги остаются приоритетнее.
+    Разбор аргументов.
+    Логирование настраивается ДО чтения конфига, чтобы все сообщения
+    (включая предупреждения) шли через единый logger.
+    Если указан --config, значения из JSON применяются как дефолты,
+    но CLI-флаги остаются приоритетнее.
     """
-    # 1. Предварительный парсинг: только --config.
+    # 1. Предварительный парсинг: только --config и параметры логирования.
     # allow_abbrev=False — иначе --conf сокращается до --config.
     pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     pre.add_argument("--config", default=None)
+    pre.add_argument("--log-level", default="INFO")
+    pre.add_argument("--log-file", default=None)
+    pre.add_argument("--quiet", action="store_true")
     known, _ = pre.parse_known_args()
 
+    # 2. Настраиваем логирование сразу
+    level = "WARNING" if known.quiet else known.log_level
+    setup_logging(level=level, log_file=known.log_file)
+    logger = get_logger()
+
+    # 3. Читаем конфиг — теперь сообщения идут через logger
     config = {}
     if known.config:
         try:
             config = load_config(known.config)
-            print(f"Конфиг: {known.config}  ({len(config)} ключей)")
+            logger.info(f"Конфиг: {known.config}  ({len(config)} ключей)")
         except (FileNotFoundError, ValueError) as e:
-            print(f"[warn] {e}", file=sys.stderr)
-            print("[warn] --config игнорируется", file=sys.stderr)
+            logger.warning(str(e))
+            logger.warning("--config игнорируется")
 
-    # 2. Полный парсинг
+    # 4. Полный парсинг
     parser = build_parser()
-    defaults = parser.parse_args([])  # только дефолты — для сравнения
+    defaults = parser.parse_args([])   # только дефолты — для сравнения
     args = parser.parse_args()
 
-    # 3. Мержим конфиг: CLI побеждает, конфиг заполняет «дырки»
+    # 5. --verbose поднимает уровень до DEBUG, если --log-level не задан явно
+    if args.verbose and args.log_level == "INFO" and not args.quiet:
+        logger.setLevel(logging.DEBUG)
+
+    # 6. Мержим конфиг: CLI побеждает, конфиг заполняет «дырки»
     if config:
         args, applied = merge_into_args(args, config, defaults)
         if applied:
-            print(f"Из конфига применено: {', '.join(applied)}")
+            logger.info(f"Из конфига применено: {', '.join(applied)}")
 
     return args
 
@@ -135,6 +155,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    logger = get_logger()
 
     # --- Сервисные команды: выполняются и выходят ---
     if args.version:
@@ -175,11 +196,11 @@ def main():
 
     files = collect_images(args.inputs)
     if not files:
-        print("Не найдено ни одного изображения.", file=sys.stderr)
+        logger.error("Не найдено ни одного изображения.")
         sys.exit(1)
 
-    print(f"Классов: {len(detector.classes)}  |  файлов: {len(files)}")
-    print(f"conf={args.conf}  nms={args.nms}  batch_size={args.batch_size}")
+    logger.info(f"Классов: {len(detector.classes)}  |  файлов: {len(files)}")
+    logger.info(f"conf={args.conf}  nms={args.nms}  batch_size={args.batch_size}")
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -188,7 +209,7 @@ def main():
     total_crops = 0
     if args.save_crops:
         os.makedirs(crops_dir, exist_ok=True)
-        print(f"Кропы: {crops_dir}")
+        logger.info(f"Кропы: {crops_dir}")
 
     # --- Face-детектор (YuNet), если --faces ---
     face_detector = None
@@ -198,10 +219,10 @@ def main():
                 model_path=args.face_model,
                 score_threshold=args.face_conf,
             )
-            print(f"Face-детектор: {args.face_model}")
+            logger.info(f"Face-детектор: {args.face_model}")
         except FileNotFoundError as e:
-            print(f"[warn] {e}", file=sys.stderr)
-            print("[warn] --faces игнорируется", file=sys.stderr)
+            logger.warning(str(e))
+            logger.warning("--faces игнорируется")
 
     # --- JSON-отчёт ---
     report = ReportBuilder(meta=ReportMeta(
@@ -221,17 +242,17 @@ def main():
     for f in files:
         img = cv2.imread(f)
         if img is None:
-            print(f"[warn] не удалось прочитать: {f}", file=sys.stderr)
+            logger.warning(f"не удалось прочитать: {f}")
             continue
         by_size[img.shape[:2]].append((f, img))
 
     if not by_size:
-        print("Не удалось прочитать ни одного изображения.", file=sys.stderr)
+        logger.error("Не удалось прочитать ни одного изображения.")
         sys.exit(1)
 
     sizes_info = ", ".join(f"{h}x{w}: {len(v)}"
                            for (h, w), v in by_size.items())
-    print(f"Групп по размеру: {len(by_size)} ({sizes_info})")
+    logger.info(f"Групп по размеру: {len(by_size)} ({sizes_info})")
 
     # --- Основной цикл ---
     batch_idx = 0
@@ -247,19 +268,19 @@ def main():
             total_time += dt_batch
             per_img_ms = dt_batch / len(images)
 
-            print(f"[batch {batch_idx}] group {grp_h}x{grp_w}  "
-                  f"{len(images)} img  "
-                  f"{dt_batch:.1f} ms total  ({per_img_ms:.1f} ms/img)")
+            logger.info(f"[batch {batch_idx}] group {grp_h}x{grp_w}  "
+                        f"{len(images)} img  "
+                        f"{dt_batch:.1f} ms total  ({per_img_ms:.1f} ms/img)")
 
             for f, img, dets in zip(valid_files, images, batch_dets):
                 h, w = img.shape[:2]
                 name = os.path.basename(f)
-                print(f"  {name:<30} найдено: {len(dets)}")
+                logger.info(f"  {name:<30} найдено: {len(dets)}")
 
                 if args.verbose:
                     for d in sorted(dets, key=lambda x: -x.score):
-                        print(f"      {d.class_name:<12} "
-                              f"score={d.score:.3f} box={d.box}")
+                        logger.debug(f"      {d.class_name:<12} "
+                                     f"score={d.score:.3f} box={d.box}")
 
                 # YOLO-боксы
                 result = draw_detections(img, dets)
@@ -270,11 +291,10 @@ def main():
                     faces = face_detector.detect(img)
                     if args.verbose and faces:
                         for fd in faces:
-                            print(f"      {'face':<12} "
-                                  f"score={fd.score:.3f} box={fd.box}")
+                            logger.debug(f"      {'face':<12} "
+                                         f"score={fd.score:.3f} box={fd.box}")
                     result = draw_faces(result, faces)
 
-                    # Счётчик лиц в правом верхнем углу
                     count_text = f"Faces: {len(faces)}"
                     (tw2, _), _ = cv2.getTextSize(
                         count_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)

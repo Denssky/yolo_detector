@@ -15,6 +15,10 @@ import numpy as np
 from detector import Detection
 from face_detector import FaceDetection
 from json_report import ReportBuilder
+from logger import get_logger
+
+logger = get_logger()
+
 
 
 # ---------- Кропы ----------
@@ -154,7 +158,7 @@ def collect_images(paths: Iterable[str]) -> List[str]:
         elif os.path.isfile(p):
             found.append(p)
         else:
-            print(f"[warn] не найдено: {p}", file=sys.stderr)
+            logger.warning(f"не найдено: {p}")
 
     seen = set()
     unique = []
