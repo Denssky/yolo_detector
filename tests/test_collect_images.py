@@ -51,12 +51,13 @@ def test_collect_glob(tmp_path, sample_dir):
     assert names == ["a.jpg", "b.jpg"]
 
 
-def test_collect_missing_path(capsys):
-    """Несуществующий путь — предупреждение, но не падение."""
-    files = collect_images(["definitely_does_not_exist_12345.jpg"])
+def test_collect_missing_path(caplog):
+    """Несуществующий путь — предупреждение в лог, но не падение."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="yolo_detector"):
+        files = collect_images(["definitely_does_not_exist_12345.jpg"])
     assert files == []
-    captured = capsys.readouterr()
-    assert "не найдено" in captured.err
+    assert "не найдено" in caplog.text
 
 
 def test_collect_deduplicates(tmp_path, sample_dir):
