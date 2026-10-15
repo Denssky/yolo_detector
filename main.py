@@ -6,6 +6,7 @@
 #   - батч-инференс с автоматической группировкой по размеру изображения;
 #   - сохранение аннотированных картинок, сводного JSON, CSV и кропов объектов;
 #   - детекция лиц через YuNet (--faces);
+#   - графики matplotlib (--plots);
 #   - интерактивный просмотр результатов в окне OpenCV.
 
 import os
@@ -23,6 +24,7 @@ import numpy as np
 
 from json_report import ReportBuilder, ReportMeta, ImageRecord, detection_to_dict
 from face_detector import FaceDetector, FaceDetection
+from report_plots import save_report_plots
 
 
 # ============================================================================
@@ -57,18 +59,9 @@ FACE_COLOR = (0, 255, 255)
 FACE_LANDMARK_COLOR = (0, 0, 255)
 
 CLASS_PALETTE = [
-    (0, 255, 0),
-    (0, 165, 255),
-    (255, 0, 0),
-    (0, 0, 255),
-    (255, 255, 0),
-    (255, 0, 255),
-    (0, 255, 255),
-    (128, 0, 128),
-    (0, 128, 255),
-    (128, 128, 0),
-    (0, 128, 0),
-    (203, 192, 255),
+    (0, 255, 0), (0, 165, 255), (255, 0, 0), (0, 0, 255),
+    (255, 255, 0), (255, 0, 255), (0, 255, 255), (128, 0, 128),
+    (0, 128, 255), (128, 128, 0), (0, 128, 0), (203, 192, 255),
 ]
 
 
@@ -82,7 +75,7 @@ def color_for_class(class_id: int) -> tuple:
 
 @dataclass
 class Detection:
-    box: Tuple[int, int, int, int]   # x, y, w, h
+    box: Tuple[int, int, int, int]
     class_id: int
     score: float
     class_name: str = ""
@@ -140,13 +133,11 @@ class YoloDetector:
         return {i for i, name in enumerate(self.classes)
                 if name in self.classes_of_interest}
 
-    def _postprocess(self, outs,
-                     orig_sizes: Sequence[Tuple[int, int]]
-                     ) -> List[List[Detection]]:
+    def _postprocess(self, outs, orig_sizes):
         batch_size = len(orig_sizes)
-        per_image_boxes: List[List[List[int]]] = [[] for _ in range(batch_size)]
-        per_image_scores: List[List[float]] = [[] for _ in range(batch_size)]
-        per_image_class_ids: List[List[int]] = [[] for _ in range(batch_size)]
+        per_image_boxes = [[] for _ in range(batch_size)]
+        per_image_scores = [[] for _ in range(batch_size)]
+        per_image_class_ids = [[] for _ in range(batch_size)]
 
         for out in outs:
             if out.ndim != 2:
@@ -191,7 +182,7 @@ class YoloDetector:
                 per_image_class_ids[b].extend(cls.tolist())
 
         wanted = self._filter_class_ids()
-        results: List[List[Detection]] = []
+        results = []
         for b in range(batch_size):
             boxes = per_image_boxes[b]
             scores = per_image_scores[b]
@@ -222,11 +213,10 @@ class YoloDetector:
             results.append(dets)
         return results
 
-    def detect(self, image: np.ndarray) -> List[Detection]:
+    def detect(self, image):
         return self.detect_batch([image])[0]
 
-    def detect_batch(self, images: Sequence[np.ndarray]
-                     ) -> List[List[Detection]]:
+    def detect_batch(self, images):
         if not images:
             return []
         orig_sizes = [img.shape[:2] for img in images]
@@ -243,7 +233,7 @@ class YoloDetector:
 # Отрисовка
 # ============================================================================
 
-def draw_detections(image: np.ndarray, detections: List[Detection]) -> np.ndarray:
+def draw_detections(image, detections):
     for d in detections:
         color = color_for_class(d.class_id)
         cv2.rectangle(image, (d.x1, d.y1), (d.x2, d.y2), color, 2)
@@ -259,18 +249,15 @@ def draw_detections(image: np.ndarray, detections: List[Detection]) -> np.ndarra
     return image
 
 
-def draw_faces(image: np.ndarray, faces: List[FaceDetection]) -> np.ndarray:
-    """Рисует боксы лиц и 5 ключевых точек."""
+def draw_faces(image, faces):
     for f in faces:
         cv2.rectangle(image, (f.x1, f.y1), (f.x2, f.y2), FACE_COLOR, 2)
-
         label = f"face {f.score:.2f}"
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(image, (f.x1, f.y1 - th - base),
                       (f.x1 + tw, f.y1), FACE_COLOR, -1)
         cv2.putText(image, label, (f.x1, f.y1 - base),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_COLOR, 1, cv2.LINE_AA)
-
         for (lx, ly) in f.landmarks:
             cv2.circle(image, (int(lx), int(ly)), 2, FACE_LANDMARK_COLOR, -1)
     return image
@@ -280,49 +267,32 @@ def draw_faces(image: np.ndarray, faces: List[FaceDetection]) -> np.ndarray:
 # Сохранение результатов
 # ============================================================================
 
-def save_crops(image: np.ndarray,
-               detections: List[Detection],
-               src_name: str,
-               crops_dir: str,
-               counter: dict) -> int:
-    """Сохраняет вырезанные YOLO-объекты."""
+def save_crops(image, detections, src_name, crops_dir, counter):
     if not detections:
         return 0
-
     os.makedirs(crops_dir, exist_ok=True)
     stem = os.path.splitext(src_name)[0]
     h_img, w_img = image.shape[:2]
     saved = 0
-
     for d in detections:
-        x1 = max(0, d.x1)
-        y1 = max(0, d.y1)
-        x2 = min(w_img, d.x2)
-        y2 = min(h_img, d.y2)
+        x1 = max(0, d.x1); y1 = max(0, d.y1)
+        x2 = min(w_img, d.x2); y2 = min(h_img, d.y2)
         if x2 <= x1 or y2 <= y1:
             continue
         crop = image[y1:y2, x1:x2]
         if crop.size == 0:
             continue
-
         class_slug = d.class_name.replace(" ", "_")
         key = (stem, class_slug)
         counter[key] = counter.get(key, 0) + 1
         num = counter[key]
-
         fname = f"{stem}_{class_slug}_{num:03d}.jpg"
         cv2.imwrite(os.path.join(crops_dir, fname), crop)
         saved += 1
-
     return saved
 
 
-def save_face_crops(image: np.ndarray,
-                    faces: List[FaceDetection],
-                    src_name: str,
-                    crops_dir: str,
-                    counter: dict) -> int:
-    """Сохраняет вырезанные лица. Имя: {stem}_face_{NNN}.jpg"""
+def save_face_crops(image, faces, src_name, crops_dir, counter):
     if not faces:
         return 0
     os.makedirs(crops_dir, exist_ok=True)
@@ -330,10 +300,8 @@ def save_face_crops(image: np.ndarray,
     h_img, w_img = image.shape[:2]
     saved = 0
     for f in faces:
-        x1 = max(0, f.x1)
-        y1 = max(0, f.y1)
-        x2 = min(w_img, f.x2)
-        y2 = min(h_img, f.y2)
+        x1 = max(0, f.x1); y1 = max(0, f.y1)
+        x2 = min(w_img, f.x2); y2 = min(h_img, f.y2)
         if x2 <= x1 or y2 <= y1:
             continue
         crop = image[y1:y2, x1:x2]
@@ -348,8 +316,7 @@ def save_face_crops(image: np.ndarray,
     return saved
 
 
-def save_csv(report: ReportBuilder, path: str) -> int:
-    """Плоская таблица: одна строка = одна детекция."""
+def save_csv(report, path):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     rows = 0
     with open(path, "w", newline="", encoding="utf-8") as fp:
@@ -360,19 +327,15 @@ def save_csv(report: ReportBuilder, path: str) -> int:
             for d in img.detections:
                 box = d["box"]
                 writer.writerow([
-                    img.path,
-                    d["class_name"],
-                    d["class_id"],
-                    d["score"],
+                    img.path, d["class_name"], d["class_id"], d["score"],
                     box["x"], box["y"], box["w"], box["h"],
                 ])
                 rows += 1
     return rows
 
 
-def print_class_summary(report: ReportBuilder) -> None:
-    """Сводка по классам: количество, средний score, min/max."""
-    stats: dict = {}
+def print_class_summary(report):
+    stats = {}
     for img in report.images:
         for d in img.detections:
             stats.setdefault(d["class_name"], []).append(d["score"])
@@ -389,8 +352,7 @@ def print_class_summary(report: ReportBuilder) -> None:
         n = len(scores)
         total += n
         avg = sum(scores) / n
-        lo = min(scores)
-        hi = max(scores)
+        lo = min(scores); hi = max(scores)
         print(f"  {name:<{name_w}} : {n:>3}  "
               f"avg={avg:.2f}  ({lo:.2f} .. {hi:.2f})")
     print(f"Всего: {total} детекций, {len(items)} класс(ов)")
@@ -400,9 +362,9 @@ def print_class_summary(report: ReportBuilder) -> None:
 # Сбор файлов и CLI
 # ============================================================================
 
-def collect_images(paths: Iterable[str]) -> List[str]:
+def collect_images(paths):
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
-    found: List[str] = []
+    found = []
     for p in paths:
         if os.path.isdir(p):
             for ext in exts:
@@ -426,9 +388,7 @@ def collect_images(paths: Iterable[str]) -> List[str]:
 
 def parse_args():
     p = argparse.ArgumentParser(description="YOLOv4-tiny object detector (images)")
-    p.add_argument("inputs", nargs="*", default=["images/trucks.jpg"],
-                   help="файлы, папки или glob-паттерны "
-                        "(по умолчанию: images/trucks.jpg)")
+    p.add_argument("inputs", nargs="*", default=["images/trucks.jpg"])
     p.add_argument("--output-dir", default="output")
     p.add_argument("--json", default="output/detections.json")
     p.add_argument("--csv", default="output/detections.csv",
@@ -436,23 +396,20 @@ def parse_args():
     p.add_argument("--conf", type=float, default=DEFAULT_CONF)
     p.add_argument("--nms", type=float, default=DEFAULT_NMS)
     p.add_argument("--classes", nargs="+", default=list(DEFAULT_CLASSES))
-    p.add_argument("--preset", choices=list(CLASS_PRESETS.keys()),
-                   help="готовый набор классов (перебивает --classes)")
+    p.add_argument("--preset", choices=list(CLASS_PRESETS.keys()))
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--cuda", action="store_true")
-    p.add_argument("--show", action="store_true",
-                   help="открыть окно с результатом (по умолчанию — нет)")
+    p.add_argument("--show", action="store_true")
     p.add_argument("--verbose", action="store_true")
-    p.add_argument("--save-crops", action="store_true",
-                   help="сохранять вырезанные объекты и лица")
-    p.add_argument("--crops-dir", default=None,
-                   help="папка для кропов (по умолчанию <output-dir>/crops)")
-    p.add_argument("--faces", action="store_true",
-                   help="дополнительно детектировать лица (YuNet)")
+    p.add_argument("--save-crops", action="store_true")
+    p.add_argument("--crops-dir", default=None)
+    p.add_argument("--faces", action="store_true")
     p.add_argument("--face-model",
                    default="models/face_detection_yunet_2023mar.onnx")
-    p.add_argument("--face-conf", type=float, default=0.7,
-                   help="порог уверенности для лиц (по умолчанию 0.7)")
+    p.add_argument("--face-conf", type=float, default=0.7)
+    p.add_argument("--plots", action="store_true",
+                   help="построить графики результатов (output/report.png)")
+    p.add_argument("--plots-path", default="output/report.png")
     return p.parse_args()
 
 
@@ -465,8 +422,7 @@ def chunked(seq, n):
 # Интерактивный просмотр
 # ============================================================================
 
-def browse_results(results: List[Tuple[str, np.ndarray]],
-                   window_name: str = "YOLOv4-tiny") -> None:
+def browse_results(results, window_name="YOLOv4-tiny"):
     n = len(results)
     idx = 0
     print(f"\nПросмотр {n} изображений. "
@@ -478,11 +434,9 @@ def browse_results(results: List[Tuple[str, np.ndarray]],
         hud = f"[{idx + 1}/{n}]  {name}"
         y = display.shape[0] - 15
         cv2.putText(display, hud, (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    (0, 0, 0), 4, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(display, hud, (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
         cv2.imshow(window_name, display)
         key = cv2.waitKey(0)
@@ -531,13 +485,12 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     crops_dir = args.crops_dir or os.path.join(args.output_dir, "crops")
-    crops_counter: dict = {}
+    crops_counter = {}
     total_crops = 0
     if args.save_crops:
         os.makedirs(crops_dir, exist_ok=True)
         print(f"Кропы: {crops_dir}")
 
-    # --- Face-детектор (YuNet), если --faces ---
     face_detector = None
     if args.faces:
         try:
@@ -560,10 +513,9 @@ def main():
     ))
 
     total_time = 0.0
-    saved_results: List[Tuple[str, np.ndarray]] = []
+    saved_results = []
 
-    # --- Загрузка и группировка по размеру ---
-    by_size: dict = defaultdict(list)
+    by_size = defaultdict(list)
     for f in files:
         img = cv2.imread(f)
         if img is None:
@@ -579,7 +531,6 @@ def main():
                            for (h, w), v in by_size.items())
     print(f"Групп по размеру: {len(by_size)} ({sizes_info})")
 
-    # --- Основной цикл ---
     batch_idx = 0
     for (grp_h, grp_w), items in by_size.items():
         for batch_files in chunked(items, args.batch_size):
@@ -607,11 +558,9 @@ def main():
                         print(f"      {d.class_name:<12} "
                               f"score={d.score:.3f} box={d.box}")
 
-                # YOLO-боксы
                 result = draw_detections(img, dets)
 
-                # Детекция лиц поверх YOLO
-                faces: List[FaceDetection] = []
+                faces = []
                 if face_detector is not None:
                     faces = face_detector.detect(img)
                     if args.verbose and faces:
@@ -620,7 +569,6 @@ def main():
                                   f"score={fd.score:.3f} box={fd.box}")
                     result = draw_faces(result, faces)
 
-                    # Счётчик лиц в правом верхнем углу
                     count_text = f"Faces: {len(faces)}"
                     (tw2, _), _ = cv2.getTextSize(
                         count_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
@@ -633,7 +581,6 @@ def main():
                 cv2.imwrite(out_path, result)
                 saved_results.append((name, result))
 
-                # Кропы: YOLO-объекты + лица
                 if args.save_crops:
                     total_crops += save_crops(img, dets, name,
                                               crops_dir, crops_counter)
@@ -641,7 +588,6 @@ def main():
                         total_crops += save_face_crops(
                             img, faces, name, crops_dir, crops_counter)
 
-                # JSON: YOLO + лица (класс "face")
                 all_dets = [detection_to_dict(d) for d in dets]
                 for fd in faces:
                     all_dets.append({
@@ -674,6 +620,11 @@ def main():
         print(f"CSV: {args.csv}  ({n_rows} строк)")
 
     print_class_summary(report)
+
+    if args.plots:
+        plot_path = save_report_plots(report, args.plots_path)
+        if plot_path:
+            print(f"Графики: {plot_path}")
 
     total_dets = report.meta.total_detections
     print(f"\nИтого: {report.meta.total_images} файлов, "
