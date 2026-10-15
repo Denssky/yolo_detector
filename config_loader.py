@@ -18,6 +18,7 @@ CONFIG_KEY_MAP = {
     "output_dir":   "output_dir",
     "json":         "json",
     "csv":          "csv",
+    "xlsx":         "xlsx",
     "save_crops":   "save_crops",
     "crops_dir":    "crops_dir",
     "faces":        "faces",
@@ -29,6 +30,7 @@ CONFIG_KEY_MAP = {
     "verbose":      "verbose",
     "cuda":         "cuda",
     "inputs":       "inputs",
+    
 }
 
 

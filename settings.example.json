@@ -6,5 +6,6 @@
   "faces": true,
   "face_conf": 0.9,
   "plots": true,
+  "xlsx": "output/detections.xlsx",
   "verbose": false
 }

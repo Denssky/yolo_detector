@@ -27,6 +27,7 @@ from json_report import ReportBuilder, ReportMeta, ImageRecord, detection_to_dic
 from face_detector import FaceDetector, FaceDetection
 from report_plots import save_report_plots
 from config_loader import load_config, merge_into_args
+from excel_report import save_excel
 
 
 # ============================================================================
@@ -447,6 +448,8 @@ def build_parser():
     p.add_argument("--face-conf", type=float, default=0.7)
     p.add_argument("--plots", action="store_true")
     p.add_argument("--plots-path", default="output/report.png")
+    p.add_argument("--xlsx", default="output/detections.xlsx",
+                   help="путь к Excel-отчёту (пустая строка — отключить)")
     return p
 
 
@@ -693,6 +696,10 @@ def main():
     saved = report.save(args.json)
 
     if args.csv:
+        if args.xlsx:
+            xlsx_path = save_excel(report, args.xlsx)
+        if xlsx_path:
+            print(f"XLSX: {xlsx_path}")
         n_rows = save_csv(report, args.csv)
         print(f"CSV: {args.csv}  ({n_rows} строк)")
 
