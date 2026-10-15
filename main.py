@@ -4,9 +4,10 @@
 #   - обработка файлов, папок и glob-паттернов;
 #   - фильтр по классам COCO (через --classes или готовые --preset);
 #   - батч-инференс с автоматической группировкой по размеру изображения;
-#   - сохранение аннотированных картинок, сводного JSON, CSV и кропов объектов;
+#   - сохранение аннотированных картинок, сводного JSON, CSV и кропов;
 #   - детекция лиц через YuNet (--faces);
 #   - графики matplotlib (--plots);
+#   - настройки через JSON-конфиг (--config);
 #   - интерактивный просмотр результатов в окне OpenCV.
 
 import os
@@ -25,6 +26,7 @@ import numpy as np
 from json_report import ReportBuilder, ReportMeta, ImageRecord, detection_to_dict
 from face_detector import FaceDetector, FaceDetection
 from report_plots import save_report_plots
+from config_loader import load_config, merge_into_args
 
 
 # ============================================================================
@@ -59,9 +61,18 @@ FACE_COLOR = (0, 255, 255)
 FACE_LANDMARK_COLOR = (0, 0, 255)
 
 CLASS_PALETTE = [
-    (0, 255, 0), (0, 165, 255), (255, 0, 0), (0, 0, 255),
-    (255, 255, 0), (255, 0, 255), (0, 255, 255), (128, 0, 128),
-    (0, 128, 255), (128, 128, 0), (0, 128, 0), (203, 192, 255),
+    (0, 255, 0),
+    (0, 165, 255),
+    (255, 0, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (255, 0, 255),
+    (0, 255, 255),
+    (128, 0, 128),
+    (0, 128, 255),
+    (128, 128, 0),
+    (0, 128, 0),
+    (203, 192, 255),
 ]
 
 
@@ -133,11 +144,13 @@ class YoloDetector:
         return {i for i, name in enumerate(self.classes)
                 if name in self.classes_of_interest}
 
-    def _postprocess(self, outs, orig_sizes):
+    def _postprocess(self, outs,
+                     orig_sizes: Sequence[Tuple[int, int]]
+                     ) -> List[List[Detection]]:
         batch_size = len(orig_sizes)
-        per_image_boxes = [[] for _ in range(batch_size)]
-        per_image_scores = [[] for _ in range(batch_size)]
-        per_image_class_ids = [[] for _ in range(batch_size)]
+        per_image_boxes: List[List[List[int]]] = [[] for _ in range(batch_size)]
+        per_image_scores: List[List[float]] = [[] for _ in range(batch_size)]
+        per_image_class_ids: List[List[int]] = [[] for _ in range(batch_size)]
 
         for out in outs:
             if out.ndim != 2:
@@ -182,7 +195,7 @@ class YoloDetector:
                 per_image_class_ids[b].extend(cls.tolist())
 
         wanted = self._filter_class_ids()
-        results = []
+        results: List[List[Detection]] = []
         for b in range(batch_size):
             boxes = per_image_boxes[b]
             scores = per_image_scores[b]
@@ -213,10 +226,11 @@ class YoloDetector:
             results.append(dets)
         return results
 
-    def detect(self, image):
+    def detect(self, image: np.ndarray) -> List[Detection]:
         return self.detect_batch([image])[0]
 
-    def detect_batch(self, images):
+    def detect_batch(self, images: Sequence[np.ndarray]
+                     ) -> List[List[Detection]]:
         if not images:
             return []
         orig_sizes = [img.shape[:2] for img in images]
@@ -233,7 +247,7 @@ class YoloDetector:
 # Отрисовка
 # ============================================================================
 
-def draw_detections(image, detections):
+def draw_detections(image: np.ndarray, detections: List[Detection]) -> np.ndarray:
     for d in detections:
         color = color_for_class(d.class_id)
         cv2.rectangle(image, (d.x1, d.y1), (d.x2, d.y2), color, 2)
@@ -249,15 +263,18 @@ def draw_detections(image, detections):
     return image
 
 
-def draw_faces(image, faces):
+def draw_faces(image: np.ndarray, faces: List[FaceDetection]) -> np.ndarray:
+    """Рисует боксы лиц и 5 ключевых точек."""
     for f in faces:
         cv2.rectangle(image, (f.x1, f.y1), (f.x2, f.y2), FACE_COLOR, 2)
+
         label = f"face {f.score:.2f}"
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.rectangle(image, (f.x1, f.y1 - th - base),
                       (f.x1 + tw, f.y1), FACE_COLOR, -1)
         cv2.putText(image, label, (f.x1, f.y1 - base),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_COLOR, 1, cv2.LINE_AA)
+
         for (lx, ly) in f.landmarks:
             cv2.circle(image, (int(lx), int(ly)), 2, FACE_LANDMARK_COLOR, -1)
     return image
@@ -267,13 +284,19 @@ def draw_faces(image, faces):
 # Сохранение результатов
 # ============================================================================
 
-def save_crops(image, detections, src_name, crops_dir, counter):
+def save_crops(image: np.ndarray,
+               detections: List[Detection],
+               src_name: str,
+               crops_dir: str,
+               counter: dict) -> int:
     if not detections:
         return 0
+
     os.makedirs(crops_dir, exist_ok=True)
     stem = os.path.splitext(src_name)[0]
     h_img, w_img = image.shape[:2]
     saved = 0
+
     for d in detections:
         x1 = max(0, d.x1); y1 = max(0, d.y1)
         x2 = min(w_img, d.x2); y2 = min(h_img, d.y2)
@@ -282,17 +305,24 @@ def save_crops(image, detections, src_name, crops_dir, counter):
         crop = image[y1:y2, x1:x2]
         if crop.size == 0:
             continue
+
         class_slug = d.class_name.replace(" ", "_")
         key = (stem, class_slug)
         counter[key] = counter.get(key, 0) + 1
         num = counter[key]
+
         fname = f"{stem}_{class_slug}_{num:03d}.jpg"
         cv2.imwrite(os.path.join(crops_dir, fname), crop)
         saved += 1
+
     return saved
 
 
-def save_face_crops(image, faces, src_name, crops_dir, counter):
+def save_face_crops(image: np.ndarray,
+                    faces: List[FaceDetection],
+                    src_name: str,
+                    crops_dir: str,
+                    counter: dict) -> int:
     if not faces:
         return 0
     os.makedirs(crops_dir, exist_ok=True)
@@ -316,7 +346,7 @@ def save_face_crops(image, faces, src_name, crops_dir, counter):
     return saved
 
 
-def save_csv(report, path):
+def save_csv(report: ReportBuilder, path: str) -> int:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     rows = 0
     with open(path, "w", newline="", encoding="utf-8") as fp:
@@ -327,15 +357,18 @@ def save_csv(report, path):
             for d in img.detections:
                 box = d["box"]
                 writer.writerow([
-                    img.path, d["class_name"], d["class_id"], d["score"],
+                    img.path,
+                    d["class_name"],
+                    d["class_id"],
+                    d["score"],
                     box["x"], box["y"], box["w"], box["h"],
                 ])
                 rows += 1
     return rows
 
 
-def print_class_summary(report):
-    stats = {}
+def print_class_summary(report: ReportBuilder) -> None:
+    stats: dict = {}
     for img in report.images:
         for d in img.detections:
             stats.setdefault(d["class_name"], []).append(d["score"])
@@ -362,9 +395,9 @@ def print_class_summary(report):
 # Сбор файлов и CLI
 # ============================================================================
 
-def collect_images(paths):
+def collect_images(paths: Iterable[str]) -> List[str]:
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
-    found = []
+    found: List[str] = []
     for p in paths:
         if os.path.isdir(p):
             for ext in exts:
@@ -386,9 +419,14 @@ def collect_images(paths):
     return unique
 
 
-def parse_args():
+def build_parser():
+    """Создаёт argparse-парсер со всеми аргументами."""
     p = argparse.ArgumentParser(description="YOLOv4-tiny object detector (images)")
-    p.add_argument("inputs", nargs="*", default=["images/trucks.jpg"])
+    p.add_argument("inputs", nargs="*", default=["images/trucks.jpg"],
+                   help="файлы, папки или glob-паттерны "
+                        "(по умолчанию: images/trucks.jpg)")
+    p.add_argument("--config", default=None,
+                   help="путь к JSON-файлу с настройками")
     p.add_argument("--output-dir", default="output")
     p.add_argument("--json", default="output/detections.json")
     p.add_argument("--csv", default="output/detections.csv",
@@ -407,10 +445,42 @@ def parse_args():
     p.add_argument("--face-model",
                    default="models/face_detection_yunet_2023mar.onnx")
     p.add_argument("--face-conf", type=float, default=0.7)
-    p.add_argument("--plots", action="store_true",
-                   help="построить графики результатов (output/report.png)")
+    p.add_argument("--plots", action="store_true")
     p.add_argument("--plots-path", default="output/report.png")
-    return p.parse_args()
+    return p
+
+
+def parse_args():
+    """
+    Разбор аргументов. Если указан --config, значения из JSON применяются
+    как дефолты, но CLI-флаги остаются приоритетнее.
+    """
+    # 1. Предварительный парсинг: только --config
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default=None)
+    known, _ = pre.parse_known_args()
+
+    config = {}
+    if known.config:
+        try:
+            config = load_config(known.config)
+            print(f"Конфиг: {known.config}  ({len(config)} ключей)")
+        except (FileNotFoundError, ValueError) as e:
+            print(f"[warn] {e}", file=sys.stderr)
+            print("[warn] --config игнорируется", file=sys.stderr)
+
+    # 2. Полный парсинг
+    parser = build_parser()
+    defaults = parser.parse_args([])
+    args = parser.parse_args()
+
+    # 3. Мержим конфиг: CLI побеждает, конфиг заполняет «дырки»
+    if config:
+        args, applied = merge_into_args(args, config, defaults)
+        if applied:
+            print(f"Из конфига применено: {', '.join(applied)}")
+
+    return args
 
 
 def chunked(seq, n):
@@ -422,7 +492,8 @@ def chunked(seq, n):
 # Интерактивный просмотр
 # ============================================================================
 
-def browse_results(results, window_name="YOLOv4-tiny"):
+def browse_results(results: List[Tuple[str, np.ndarray]],
+                   window_name: str = "YOLOv4-tiny") -> None:
     n = len(results)
     idx = 0
     print(f"\nПросмотр {n} изображений. "
@@ -434,9 +505,11 @@ def browse_results(results, window_name="YOLOv4-tiny"):
         hud = f"[{idx + 1}/{n}]  {name}"
         y = display.shape[0] - 15
         cv2.putText(display, hud, (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 4, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (0, 0, 0), 4, cv2.LINE_AA)
         cv2.putText(display, hud, (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (255, 255, 255), 2, cv2.LINE_AA)
 
         cv2.imshow(window_name, display)
         key = cv2.waitKey(0)
@@ -460,6 +533,10 @@ def browse_results(results, window_name="YOLOv4-tiny"):
 
 def main():
     args = parse_args()
+
+    # Если inputs пуст — берём дефолт
+    if not args.inputs:
+        args.inputs = ["images/trucks.jpg"]
 
     if args.preset:
         classes = CLASS_PRESETS[args.preset]
@@ -485,7 +562,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     crops_dir = args.crops_dir or os.path.join(args.output_dir, "crops")
-    crops_counter = {}
+    crops_counter: dict = {}
     total_crops = 0
     if args.save_crops:
         os.makedirs(crops_dir, exist_ok=True)
@@ -513,9 +590,9 @@ def main():
     ))
 
     total_time = 0.0
-    saved_results = []
+    saved_results: List[Tuple[str, np.ndarray]] = []
 
-    by_size = defaultdict(list)
+    by_size: dict = defaultdict(list)
     for f in files:
         img = cv2.imread(f)
         if img is None:
@@ -560,7 +637,7 @@ def main():
 
                 result = draw_detections(img, dets)
 
-                faces = []
+                faces: List[FaceDetection] = []
                 if face_detector is not None:
                     faces = face_detector.detect(img)
                     if args.verbose and faces:

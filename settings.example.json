@@ -1,0 +1,10 @@
+{
+  "preset": "traffic",
+  "conf": 0.2,
+  "batch_size": 8,
+  "save_crops": false,
+  "faces": true,
+  "face_conf": 0.9,
+  "plots": true,
+  "verbose": false
+}

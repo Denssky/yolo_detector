@@ -36,3 +36,6 @@ images/*.png
 Thumbs.db
 # YuNet model (download separately)
 models/*.onnx
+
+# User-specific settings
+settings.json
