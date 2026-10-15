@@ -34,3 +34,5 @@ images/*.png
 # Системное
 .DS_Store
 Thumbs.db
+# YuNet model (download separately)
+models/*.onnx
