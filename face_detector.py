@@ -40,6 +40,10 @@ class FaceDetection:
 class FaceDetector:
     """Обёртка над cv2.FaceDetectorYN."""
 
+    # Эмпирический максимум score для этой сборки OpenCV.
+    # На канонической OpenCV score в 0..1, здесь — до ~5000.
+    RAW_SCORE_MAX = 500.0
+
     def __init__(self,
                  model_path: str = DEFAULT_MODEL,
                  score_threshold: float = 0.7,
@@ -55,8 +59,11 @@ class FaceDetector:
         self.detector = cv2.FaceDetectorYN.create(
             model=model_path,
             config="",
-            input_size=(320, 320),   # будет переопределяться в detect()
-            score_threshold=score_threshold,
+            input_size=(320, 320),   # переопределяется в detect()
+            # Внутренний порог отключён: на этой сборке OpenCV
+            # score возвращается не в 0..1, и внутренний фильтр
+            # либо не работает, либо отсекает всё подряд.
+            score_threshold=0.0,
             nms_threshold=nms_threshold,
             top_k=top_k,
         )
@@ -89,28 +96,27 @@ class FaceDetector:
 
         results: List[FaceDetection] = []
         for face in faces:
-            # score — приводим к float, фильтруем вручную:
-            # OpenCV может игнорировать score_threshold в create().
-            score = float(face[4])
-            if score < self.score_threshold:
-                continue
+            raw_score = float(face[4])
 
-            # Координаты конвертируем в обычные int, чтобы json.dump
-            # мог их сериализовать (np.int64 → TypeError).
-            # Делим на scale — возвращаем к оригинальному размеру.
+            # Координаты конвертируем в обычные int (для json.dump)
+            # и делим на scale — возвращаем к оригинальному размеру.
             x = int(face[0] / scale)
             y = int(face[1] / scale)
             w_box = int(face[2] / scale)
             h_box = int(face[3] / scale)
 
-            # Отсекаем мусорные мелкие боксы.
+            # Фильтр по размеру бокса — отсекает мусорные мелкие детекции.
             if w_box < 20 or h_box < 20:
                 continue
+
+            # Нормализуем score в 0..1 для отображения.
+            # На этой сборке OpenCV raw_score идёт до ~500.
+            display_score = min(1.0, raw_score / self.RAW_SCORE_MAX)
 
             landmarks = face[5:15].reshape(5, 2).astype(float) / scale
             results.append(FaceDetection(
                 box=(x, y, w_box, h_box),
-                score=score,
+                score=display_score,
                 landmarks=landmarks,
             ))
         return results
