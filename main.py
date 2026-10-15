@@ -25,6 +25,9 @@ import cv2
 import numpy as np
 
 from config_loader import load_config, merge_into_args
+from cli_utils import (
+    print_version, run_check, print_classes, print_presets,
+)
 from detector import (
     YoloDetector, Detection,
     WEIGHTS, CONFIG, NAMES,
@@ -32,13 +35,16 @@ from detector import (
 )
 from drawing import draw_detections, draw_faces, browse_results
 from excel_report import save_excel
-from face_detector import FaceDetector, FaceDetection
+from face_detector import FaceDetector, FaceDetection, DEFAULT_MODEL
 from io_utils import (
     save_crops, save_face_crops, save_csv,
     print_class_summary, collect_images,
 )
 from json_report import ReportBuilder, ReportMeta, ImageRecord, detection_to_dict
 from report_plots import save_report_plots
+
+
+__version__ = "1.0.0"
 
 
 # ---------- Утилиты ----------
@@ -54,6 +60,14 @@ def chunked(seq, n):
 def build_parser():
     """Создаёт argparse-парсер со всеми аргументами."""
     p = argparse.ArgumentParser(description="YOLOv4-tiny object detector (images)")
+    p.add_argument("--version", action="store_true",
+                   help="показать версию и выйти")
+    p.add_argument("--check", action="store_true",
+                   help="проверить модели и окружение, выйти")
+    p.add_argument("--list-classes", action="store_true",
+                   help="показать все классы COCO, выйти")
+    p.add_argument("--list-presets", action="store_true",
+                   help="показать доступные пресеты, выйти")
     p.add_argument("inputs", nargs="*", default=["images/trucks.jpg"],
                    help="файлы, папки или glob-паттерны "
                         "(по умолчанию: images/trucks.jpg)")
@@ -76,8 +90,7 @@ def build_parser():
     p.add_argument("--save-crops", action="store_true")
     p.add_argument("--crops-dir", default=None)
     p.add_argument("--faces", action="store_true")
-    p.add_argument("--face-model",
-                   default="models/face_detection_yunet_2023mar.onnx")
+    p.add_argument("--face-model", default=DEFAULT_MODEL)
     p.add_argument("--face-conf", type=float, default=0.7)
     p.add_argument("--plots", action="store_true")
     p.add_argument("--plots-path", default="output/report.png")
@@ -89,8 +102,9 @@ def parse_args():
     Разбор аргументов. Если указан --config, значения из JSON применяются
     как дефолты, но CLI-флаги остаются приоритетнее.
     """
-    # 1. Предварительный парсинг: только --config
-    pre = argparse.ArgumentParser(add_help=False)
+    # 1. Предварительный парсинг: только --config.
+    # allow_abbrev=False — иначе --conf сокращается до --config.
+    pre = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     pre.add_argument("--config", default=None)
     known, _ = pre.parse_known_args()
 
@@ -122,6 +136,27 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # --- Сервисные команды: выполняются и выходят ---
+    if args.version:
+        print_version(__version__)
+        return
+
+    if args.check:
+        code = run_check({
+            "YOLO weights": WEIGHTS,
+            "YOLO config":  CONFIG,
+            "YOLO names":   NAMES,
+            "YuNet model":  DEFAULT_MODEL,
+        })
+        sys.exit(code)
+
+    if args.list_classes:
+        sys.exit(print_classes(NAMES))
+
+    if args.list_presets:
+        sys.exit(print_presets(CLASS_PRESETS))
+
+    # --- Обычная обработка ---
     if not args.inputs:
         args.inputs = ["images/trucks.jpg"]
 
