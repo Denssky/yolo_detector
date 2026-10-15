@@ -4,13 +4,24 @@
 По умолчанию ищет грузовики, но умеет работать с любыми классами COCO
 (80 классов) и опционально — с лицами.
 
+Возможности:
+
+- фильтр по 80 классам COCO через `--classes` или готовые `--preset`;
+- батч-инференс с автоматической группировкой по размеру изображения;
+- детекция лиц через YuNet (`--faces`);
+- сохранение аннотированных картинок, JSON, CSV, Excel;
+- вырезание кропов объектов и лиц (`--save-crops`);
+- графики результатов (`--plots`);
+- настройки через JSON-конфиг (`--config`);
+- веб-просмотрщик результатов на Flask.
+
 ---
 
 ## Быстрый старт
 
 ```bash
 # 1. Установить зависимости
-pip install opencv-python numpy matplotlib openpyxl
+pip install opencv-python numpy matplotlib openpyxl flask
 
 # 2. Скачать модель YOLOv4-tiny в папку yolo_tiny/
 #    (ссылки — в разделе «Установка»)
@@ -19,8 +30,8 @@ pip install opencv-python numpy matplotlib openpyxl
 python main.py images/trucks.jpg
 ```
 
-Результат — в `output/`: аннотированные картинки, `detections.json`, `detections.csv`,
-`detections.xlsx`.
+Результат — в `output/`: аннотированные картинки, `detections.json`,
+`detections.csv`, `detections.xlsx`.
 
 ---
 
@@ -29,10 +40,11 @@ python main.py images/trucks.jpg
 ### 1. Зависимости
 
 ```bash
-pip install opencv-python numpy matplotlib openpyxl
+pip install opencv-python numpy matplotlib openpyxl flask
 ```
 
-Python 3.8+ обязателен. Для CUDA-инференса (опционально) нужна сборка OpenCV с CUDA.
+Python 3.8+ обязателен. Для CUDA-инференса (опционально) нужна сборка OpenCV
+с поддержкой CUDA.
 
 ### 2. Модель YOLOv4-tiny
 
@@ -44,7 +56,7 @@ Python 3.8+ обязателен. Для CUDA-инференса (опциона
 | `yolov4-tiny.cfg` | https://raw.githubusercontent.com/AlexeyAB/darknet/master/cfg/yolov4-tiny.cfg |
 | `coco.names` | https://raw.githubusercontent.com/AlexeyAB/darknet/master/data/coco.names |
 
-Одной командой PowerShell:
+Или одной командой PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path yolo_tiny | Out-Null
@@ -85,6 +97,7 @@ python main.py images/ --preset all        # все 80 классов COCO
 
 ```bash
 python main.py images/ --classes person "cell phone" laptop
+python main.py images/ --classes truck car bus
 ```
 
 ### Кропы объектов
@@ -92,7 +105,7 @@ python main.py images/ --classes person "cell phone" laptop
 ```bash
 python main.py images/ --preset traffic --save-crops
 # output/crops/trucks_truck_001.jpg, ...
-# при --faces: lena_face_001.jpg
+# при --faces: output/crops/lena_face_001.jpg
 ```
 
 ### Детекция лиц
@@ -102,21 +115,37 @@ python main.py images/ --faces
 python main.py images/ --faces --face-conf 0.9
 ```
 
-### Графики
+Лица рисуются **жёлтым**, ключевые точки (глаза, нос, уголки рта) — **красным**.
+В сводке по классам появляется `face`, в JSON/CSV — тоже.
+
+### Графики результатов
 
 ```bash
 python main.py images/ --preset traffic --plots
-# output/report.png — 4 графика в сетке 2×2
+# output/report.png — 4 графика в сетке 2×2:
+#   объекты по классам, распределение score,
+#   размеры боксов, средний score по классам
 ```
 
 ### Просмотр результатов
 
 ```bash
 python main.py images/ --show
-# A / [ — назад
-# D / ] / Space — вперёд
-# Q / Esc — выход
+# Управление в окне:
+#   A / [ — назад
+#   D / ] / Space — вперёд
+#   Q / Esc — выход
 ```
+
+### Веб-просмотр результатов
+
+```bash
+python web_viewer.py
+# Открыть http://127.0.0.1:5000
+```
+
+Галерея обработанных изображений, сводка по классам, JSON-API.
+HTML-шаблоны и CSS вынесены в `templates/` и `static/`.
 
 ### Конфиг-файл
 
@@ -150,15 +179,15 @@ python main.py images\ --config settings.json
 python main.py images\ --config settings.json --conf 0.5
 ```
 
-Поддерживаемые ключи — в `config_loader.py` (`CONFIG_KEY_MAP`). Неизвестные
-ключи игнорируются с предупреждением.
+Поддерживаемые ключи — в `config_loader.py` (`CONFIG_KEY_MAP`).
+Неизвестные ключи игнорируются с предупреждением.
 
 ### Тонкая настройка
 
 ```bash
 python main.py images/ --conf 0.2                # больше детекций
 python main.py images/ --batch-size 16           # размер батча
-python main.py images/ --cuda                    # GPU
+python main.py images/ --cuda                    # GPU, если доступна
 python main.py images/ --verbose                 # печатать каждую детекцию
 python main.py images/ --csv ""                  # отключить CSV
 python main.py images/ --xlsx ""                 # отключить Excel
@@ -248,8 +277,8 @@ output/
 
 **CSV:** `file, class_name, class_id, score, x, y, w, h`
 
-**Excel:** два листа — «Detections» (все строки) и «Summary» (сводка
-по классам: количество, средний/min/max score).
+**Excel:** два листа — «Detections» (все строки) и «Summary» (сводка по классам:
+количество, средний/min/max score).
 
 ---
 
@@ -257,17 +286,35 @@ output/
 
 ```
 yolo_detector/
-├── main.py               # точка входа, CLI, обработка изображений
-├── config_loader.py      # чтение settings.json
-├── json_report.py        # сборка JSON-отчёта
+├── main.py               # CLI + точка входа, координация
+├── detector.py           # YoloDetector, Detection, CLASS_PRESETS
+├── drawing.py            # отрисовка боксов и лиц, интерактивный просмотр
+├── io_utils.py           # кропы, CSV, сводка, сбор входных файлов
 ├── face_detector.py      # YuNet для детекции лиц
+├── json_report.py        # сборка JSON-отчёта
 ├── report_plots.py       # графики matplotlib
-├── excel_report.py       # Excel-экспорт через openpyxl
+├── excel_report.py       # Excel через openpyxl
+├── config_loader.py      # чтение settings.json
+├── web_viewer.py         # Flask-просмотрщик результатов
 ├── settings.example.json # шаблон конфига
-├── yolo_tiny/            # модель YOLO
+├── templates/            # HTML-шаблоны Flask
+│   └── index.html
+├── static/               # CSS и статика Flask
+│   └── style.css
+├── yolo_tiny/            # модель YOLO (weights, cfg, coco.names)
 ├── models/               # ONNX-модель YuNet
 ├── images/               # входные изображения
 └── output/               # результаты
+```
+
+**Зависимости между модулями** (без циклов):
+
+```
+detector.py        → (ничего из проекта)
+drawing.py         → detector, face_detector
+io_utils.py        → detector, face_detector, json_report
+main.py            → всё выше + config_loader, excel_report, report_plots
+web_viewer.py      → только читает output/detections.json
 ```
 
 ---
@@ -297,7 +344,10 @@ yolo_detector/
 
 - Python 3.8+
 - OpenCV 4.5.4+
-- numpy, matplotlib, openpyxl
+- numpy
+- matplotlib (для `--plots`)
+- openpyxl (для `--xlsx`)
+- flask (для `web_viewer.py`)
 
 ## Лицензия
 
