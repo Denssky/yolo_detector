@@ -39,3 +39,6 @@ models/*.onnx
 
 # User-specific settings
 settings.json
+# pytest
+.pytest_cache/
+__pycache__/
