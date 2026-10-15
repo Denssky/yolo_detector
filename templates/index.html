@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YOLO Detection Viewer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header class="page-header">
+  <h1>YOLO Detection Viewer</h1>
+  <p class="meta">
+    Изображений: <b>{{ data.images|length }}</b> ·
+    Детекций: <b>{{ total_dets }}</b> ·
+    Время: <b>{{ "%.1f"|format(data.meta.total_time_ms) }} ms</b>
+  </p>
+</header>
+
+{% if summary %}
+<section class="summary">
+  {% for name, count, avg in summary %}
+    <div class="summary-card">
+      <span class="summary-name">{{ name }}</span>
+      <span class="summary-count">{{ count }}</span>
+      <span class="summary-avg">avg {{ "%.2f"|format(avg) }}</span>
+    </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if data.images %}
+<section class="gallery">
+  {% for img in data.images %}
+    <a class="card" href="{{ url_for('image', filename=img.output|basename) }}" target="_blank">
+      <div class="card-image">
+        <img src="{{ url_for('image', filename=img.output|basename) }}"
+             alt="{{ img.path }}" loading="lazy">
+      </div>
+      <div class="card-body">
+        <div class="card-name" title="{{ img.path }}">{{ img.path }}</div>
+        <div class="card-dets">
+          <span class="dets-count">{{ img.detections|length }} детекций</span>
+          <div class="tags">
+            {% for d in img.detections[:6] %}
+              <span class="tag">{{ d.class_name }} {{ "%.2f"|format(d.score) }}</span>
+            {% endfor %}
+            {% if img.detections|length > 6 %}
+              <span class="tag tag-more">+{{ img.detections|length - 6 }}</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </a>
+  {% endfor %}
+</section>
+{% else %}
+<section class="empty">
+  <h2>Нет данных</h2>
+  <p>Запустите детекцию, чтобы появились результаты:</p>
+  <pre><code>python main.py images\ --preset traffic</code></pre>
+  <p>Затем обновите страницу.</p>
+</section>
+{% endif %}
+
+<footer class="page-footer">
+  <a href="{{ url_for('api_data') }}">JSON API</a>
+</footer>
+
+</body>
+</html>
