@@ -90,6 +90,11 @@ def build_parser():
     p.add_argument("--backend", choices=["opencv", "onnx"],
                    default="opencv",
                    help="бэкенд инференса (opencv DNN или onnxruntime)")
+    p.add_argument("--tile", type=int, default=0, metavar="SIZE",
+                   help="тайлинг для больших изображений: размер плитки "
+                        "в пикселях (0 = выключено, рекомендуем 640)")
+    p.add_argument("--tile-overlap", type=int, default=128,
+                   help="перекрытие плиток при тайлинге (по умолчанию 128)")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--cuda", action="store_true")
     p.add_argument("--show", action="store_true")
@@ -218,7 +223,8 @@ def main():
         sys.exit(1)
 
     logger.info(f"Классов: {len(detector.classes)}  |  файлов: {len(files)}")
-    logger.info(f"conf={args.conf}  nms={args.nms}  batch_size={args.batch_size}")
+    logger.info(f"conf={args.conf}  nms={args.nms}  batch_size={args.batch_size}"
+                + (f"  tile={args.tile}" if args.tile > 0 else ""))
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -281,7 +287,13 @@ def main():
             images = [img for _, img in batch_files]
 
             t0 = time.perf_counter()
-            batch_dets = detector.detect_batch(images)
+            if args.tile > 0:
+                batch_dets = [
+                    detector.detect_tiled(img, args.tile, args.tile_overlap)
+                    for img in images
+                ]
+            else:
+                batch_dets = detector.detect_batch(images)
             dt_batch = (time.perf_counter() - t0) * 1000
             total_time += dt_batch
             per_img_ms = dt_batch / len(images)

@@ -1,13 +1,7 @@
 """
 Детектор на базе ONNX Runtime (альтернатива OpenCV DNN).
-Использует предварительно сконвертированную yolov4-tiny.onnx.
-
-Формат выходов модели:
-  boxes: (batch, 2535, 1, 4) — xywh в нормализованных координатах [0..1]
-  confs: (batch, 2535, 80)   — вероятности классов (sigmoid уже применён)
-
-Предобработка: BGR, resize до 416x416, без нормализации (0..255),
-HWC -> CHW, добавление batch-оси.
+Формат выходов: boxes (N, 2535, 1, 4) xyxy в [0..1],
+confs (N, 2535, 80) с сигмоидой.
 """
 
 import os
@@ -39,7 +33,7 @@ class OnnxDetector:
         self.session = ort.InferenceSession(model_path, providers=providers)
         self.input_name = self.session.get_inputs()[0].name
 
-        self.input_size = input_size       # (w, h)
+        self.input_size = input_size
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
         self.classes_of_interest = set(classes_of_interest)
@@ -54,10 +48,7 @@ class OnnxDetector:
                 if name in self.classes_of_interest}
 
     def _preprocess(self, images: Sequence[np.ndarray]) -> np.ndarray:
-        """
-        BGR, resize до input_size, HWC -> CHW, batch-ось.
-        Без нормализации — модель обучена на 0..255.
-        """
+        """BGR, resize, HWC -> CHW, /255, batch-ось."""
         n = len(images)
         w, h = self.input_size
         batch = np.zeros((n, 3, h, w), dtype=np.float32)
@@ -68,15 +59,13 @@ class OnnxDetector:
 
     def detect_batch(self, images: Sequence[np.ndarray]
                      ) -> List[List[Detection]]:
-        """Инференс на батче изображений ОДНОГО размера."""
         if not images:
             return []
 
-        orig_sizes = [img.shape[:2] for img in images]  # (h, w)
+        orig_sizes = [img.shape[:2] for img in images]
         blob = self._preprocess(images)
 
         boxes, confs = self.session.run(None, {self.input_name: blob})
-        # boxes: (N, 2535, 1, 4), confs: (N, 2535, 80)
 
         batch_size = len(images)
         wanted = self._filter_class_ids()
@@ -84,10 +73,9 @@ class OnnxDetector:
 
         for b in range(batch_size):
             h, w = orig_sizes[b]
-            b_boxes = boxes[b].reshape(-1, 4)   # (2535, 4) — xywh в [0..1]
-            b_confs = confs[b]                  # (2535, 80)
+            b_boxes = boxes[b].reshape(-1, 4)
+            b_confs = confs[b]
 
-            # Лучший класс и его вероятность
             class_ids = np.argmax(b_confs, axis=1)
             scores = b_confs[np.arange(len(class_ids)), class_ids]
 
@@ -100,7 +88,7 @@ class OnnxDetector:
             sel_scores = scores[mask]
             sel_class_ids = class_ids[mask]
 
-            # xywh (норм. 0..1) -> xywh (пиксели исходного изображения)
+            # xyxy (норм. 0..1) -> xywh (пиксели)
             x1 = sel_boxes[:, 0] * w
             y1 = sel_boxes[:, 1] * h
             x2 = sel_boxes[:, 2] * w
@@ -110,8 +98,6 @@ class OnnxDetector:
             bw = np.maximum(0, x2 - x1)
             bh = np.maximum(0, y2 - y1)
 
-            # Явная конвертация в питоновские int —
-            # cv2.rectangle не принимает numpy-типы.
             nms_boxes = [
                 (int(x[i]), int(y[i]), int(bw[i]), int(bh[i]))
                 for i in range(len(x))
@@ -131,7 +117,7 @@ class OnnxDetector:
                 if cid not in wanted:
                     continue
                 dets.append(Detection(
-                    box=tuple(nms_boxes[i]),   # уже питоновские int
+                    box=tuple(nms_boxes[i]),
                     class_id=cid,
                     score=float(nms_scores[i]),
                     class_name=(self.classes[cid]
@@ -143,3 +129,30 @@ class OnnxDetector:
 
     def detect(self, image: np.ndarray) -> List[Detection]:
         return self.detect_batch([image])[0]
+
+    def detect_tiled(self,
+                     image: np.ndarray,
+                     tile_size: int = 640,
+                     overlap: int = 128) -> List[Detection]:
+        """Детекция с тайлингом (см. YoloDetector.detect_tiled)."""
+        from tiling import compute_tiles, global_nms
+
+        h, w = image.shape[:2]
+        if w <= tile_size and h <= tile_size:
+            return self.detect(image)
+
+        tiles = compute_tiles(w, h, tile_size, overlap)
+        all_dets: List[Detection] = []
+
+        for (x1, y1, x2, y2) in tiles:
+            crop = image[y1:y2, x1:x2]
+            tile_dets = self.detect(crop)
+            for d in tile_dets:
+                all_dets.append(Detection(
+                    box=(d.x1 + x1, d.y1 + y1, d.box[2], d.box[3]),
+                    class_id=d.class_id,
+                    score=d.score,
+                    class_name=d.class_name,
+                ))
+
+        return global_nms(all_dets, self.nms_threshold)
