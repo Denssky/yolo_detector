@@ -13,10 +13,11 @@ import numpy as np
 
 # ---------- Константы модели ----------
 
-MODEL_DIR = "yolo_tiny"
-WEIGHTS   = os.path.join(MODEL_DIR, "yolov4-tiny.weights")
-CONFIG    = os.path.join(MODEL_DIR, "yolov4-tiny.cfg")
-NAMES     = os.path.join(MODEL_DIR, "coco.names")
+MODEL_DIR  = "yolo_tiny"
+WEIGHTS    = os.path.join(MODEL_DIR, "yolov4-tiny.weights")
+CONFIG     = os.path.join(MODEL_DIR, "yolov4-tiny.cfg")
+NAMES      = os.path.join(MODEL_DIR, "coco.names")
+ONNX_MODEL = os.path.join(MODEL_DIR, "yolov4-tiny.onnx")
 
 INPUT_SIZE      = (416, 416)
 DEFAULT_CONF    = 0.4

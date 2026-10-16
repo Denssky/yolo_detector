@@ -1,20 +1,20 @@
 # Core
-opencv-python>=4.5.4
-numpy>=1.20
+opencv-python-headless
+numpy
 
 # Reports
-matplotlib>=3.5
-openpyxl>=3.0
+matplotlib
+openpyxl
 
 # Web viewer
-flask>=2.0
+flask
 
 # Video (optional, but recommended)
 # onnxruntime — для --backend onnx
-onnxruntime>=1.16
+onnxruntime
 
 # Face detection — уже входит в opencv-python 4.5.4+
 # (cv2.FaceDetectorYN)
 
 # Testing
-pytest>=7.0
+pytest

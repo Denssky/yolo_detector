@@ -1,0 +1,6 @@
+**/*.weights
+**/*.cfg
+.git
+__pycache__/
+*.pyc
+
