@@ -17,13 +17,14 @@ MODEL_DIR = "yolo_tiny"
 WEIGHTS   = os.path.join(MODEL_DIR, "yolov4-tiny.weights")
 CONFIG    = os.path.join(MODEL_DIR, "yolov4-tiny.cfg")
 NAMES     = os.path.join(MODEL_DIR, "coco.names")
-ONNX_MODEL = os.path.join(MODEL_DIR, "yolov4-tiny.onnx")
 
 INPUT_SIZE      = (416, 416)
 DEFAULT_CONF    = 0.4
 DEFAULT_NMS     = 0.4
 DEFAULT_CLASSES = ("truck",)
 
+# Готовые наборы классов для --preset.
+# Пустой кортеж = все 80 классов COCO.
 CLASS_PRESETS = {
     "truck":   ("truck",),
     "traffic": ("person", "car", "bus", "truck", "motorcycle", "bicycle",
@@ -40,17 +41,14 @@ CLASS_PRESETS = {
 
 @dataclass
 class Detection:
-    """Одна YOLO-детекция. box — (x, y, w, h)."""
+    """
+    Одна YOLO-детекция.
+    box — (x, y, w, h), (x, y) — левый верхний угол.
+    """
     box: Tuple[int, int, int, int]
     class_id: int
     score: float
     class_name: str = ""
-
-    def __post_init__(self):
-        # Питоновские типы — защита от numpy.int64.
-        self.box = tuple(int(v) for v in self.box)
-        self.class_id = int(self.class_id)
-        self.score = float(self.score)
 
     @property
     def x1(self): return self.box[0]
@@ -77,7 +75,7 @@ class YoloDetector:
             if not os.path.exists(p):
                 raise FileNotFoundError(f"Не найден файл: {p}")
 
-        self.net = cv2.dnn.readNet(weights, config)
+        self.net = cv2.dnn.readNetFromONNX("yolo_tiny/yolov4-tiny.onnx")
         self.input_size = input_size
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
@@ -149,11 +147,9 @@ class YoloDetector:
                 bh = bh.astype(int)
 
                 per_image_boxes[b].extend(
-                    [(int(a), int(b_), int(c), int(d_))
-                     for a, b_, c, d_ in
-                     np.stack([x, y, bw, bh], axis=1).tolist()])
-                per_image_scores[b].extend(float(s) for s in sc.tolist())
-                per_image_class_ids[b].extend(int(c) for c in cls.tolist())
+                    np.stack([x, y, bw, bh], axis=1).tolist())
+                per_image_scores[b].extend(sc.tolist())
+                per_image_class_ids[b].extend(cls.tolist())
 
         wanted = self._filter_class_ids()
         results: List[List[Detection]] = []
@@ -202,35 +198,3 @@ class YoloDetector:
         self.net.setInput(blob)
         outs = self.net.forward(self.out_layers)
         return self._postprocess(outs, orig_sizes)
-
-    def detect_tiled(self,
-                     image: np.ndarray,
-                     tile_size: int = 640,
-                     overlap: int = 128) -> List[Detection]:
-        """
-        Детекция с тайлингом. Большое изображение режется на плитки
-        tile_size x tile_size с перекрытием overlap, каждая детектится
-        отдельно, координаты пересчитываются, применяется глобальный NMS.
-        """
-        from tiling import compute_tiles, global_nms
-
-        h, w = image.shape[:2]
-        # Маленькое изображение — тайлинг не нужен.
-        if w <= tile_size and h <= tile_size:
-            return self.detect(image)
-
-        tiles = compute_tiles(w, h, tile_size, overlap)
-        all_dets: List[Detection] = []
-
-        for (x1, y1, x2, y2) in tiles:
-            crop = image[y1:y2, x1:x2]
-            tile_dets = self.detect(crop)
-            for d in tile_dets:
-                all_dets.append(Detection(
-                    box=(d.x1 + x1, d.y1 + y1, d.box[2], d.box[3]),
-                    class_id=d.class_id,
-                    score=d.score,
-                    class_name=d.class_name,
-                ))
-
-        return global_nms(all_dets, self.nms_threshold)
