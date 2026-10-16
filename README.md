@@ -41,6 +41,7 @@ python main.py images/trucks.jpg
 
 ```bash
 pip install opencv-python numpy matplotlib openpyxl flask
+pip install opencv-python numpy matplotlib openpyxl flask onnxruntime
 ```
 
 Python 3.8+ обязателен. Для CUDA-инференса (опционально) нужна сборка OpenCV
@@ -72,9 +73,23 @@ New-Item -ItemType Directory -Force -Path models | Out-Null
 Invoke-WebRequest "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx" -OutFile "models\face_detection_yunet_2023mar.onnx"
 ```
 
+### 4. Модель ONNX (только для `--backend onnx`)
+
+```powershell
+Invoke-WebRequest -Uri "https://huggingface.co/opencv/opencv_contribution/resolve/main/yolov4/yolov4-tiny.onnx" -OutFile "yolo_tiny\yolov4-tiny.onnx"
+```
 ---
 
 ## Использование
+### Ускорение через ONNX Runtime
+
+```bash
+python main.py images/ --backend onnx
+```
+
+ONNX Runtime даёт ~1.8x ускорение на CPU по сравнению с OpenCV DNN.
+Результаты детекции могут слегка отличаться (float32-расхождения,
+разные реализации постобработки).
 
 ### Базовый запуск
 
@@ -218,7 +233,9 @@ python main.py images/ --xlsx ""                 # отключить Excel
 | `--plots` | Построить графики | выкл. |
 | `--plots-path` | Путь к PNG с графиками | `output/report.png` |
 | `--show` | Открыть окно с результатом | выкл. |
-| `--verbose` | Печатать каждую детекцию | выкл. |
+| `--verbose` | Печатать каждую детекцию | 
+выкл. |
+| `--backend` | Бэкенд инференса: `opencv` (DNN) или `onnx` (ONNX Runtime) | `opencv` |
 | `--cuda` | Использовать CUDA | выкл. |
 
 ---
@@ -304,7 +321,8 @@ yolo_detector/
 ├── yolo_tiny/            # модель YOLO (weights, cfg, coco.names)
 ├── models/               # ONNX-модель YuNet
 ├── images/               # входные изображения
-└── output/               # результаты
+└── output/
+├── onnx_detector.py      # альтернативный бэкенд через onnxruntime               # результаты
 ```
 
 **Зависимости между модулями** (без циклов):
