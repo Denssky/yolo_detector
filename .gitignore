@@ -42,3 +42,8 @@ settings.json
 # pytest
 .pytest_cache/
 __pycache__/
+n# ONNX modelnyolo_tiny/*.onnx
+n# ONNX modelnyolo_tiny/*.onnx
+
+# ONNX model
+yolo_tiny/*.onnx

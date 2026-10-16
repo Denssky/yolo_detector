@@ -13,10 +13,10 @@ from face_detector import FaceDetection
 
 # ---------- Цвета (BGR, как в OpenCV) ----------
 
-TEXT_COLOR  = (0, 0, 0)         # подписи на цветных плашках
-COUNT_COLOR = (0, 0, 255)       # общий счётчик сверху
-DEFAULT_BOX_COLOR = (0, 255, 0) # fallback
-FACE_COLOR = (0, 255, 255)      # жёлтый — боксы лиц
+TEXT_COLOR  = (0, 0, 0)          # подписи на цветных плашках
+COUNT_COLOR = (0, 0, 255)        # общий счётчик сверху
+DEFAULT_BOX_COLOR = (0, 255, 0)  # fallback
+FACE_COLOR = (0, 255, 255)       # жёлтый — боксы лиц
 FACE_LANDMARK_COLOR = (0, 0, 255)  # красный — ключевые точки
 
 CLASS_PALETTE = [
@@ -47,12 +47,18 @@ def draw_detections(image: np.ndarray,
     """Рисует боксы YOLO-детекций и счётчик."""
     for d in detections:
         color = color_for_class(d.class_id)
-        cv2.rectangle(image, (d.x1, d.y1), (d.x2, d.y2), color, 2)
+
+        # Явное приведение к питоновским int — cv2.rectangle
+        # не принимает numpy.int64 / numpy.float32.
+        x1, y1 = int(d.x1), int(d.y1)
+        x2, y2 = int(d.x2), int(d.y2)
+
+        cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+
         label = f"{d.class_name} {d.score:.2f}"
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(image, (d.x1, d.y1 - th - base),
-                      (d.x1 + tw, d.y1), color, -1)
-        cv2.putText(image, label, (d.x1, d.y1 - base),
+        cv2.rectangle(image, (x1, y1 - th - base), (x1 + tw, y1), color, -1)
+        cv2.putText(image, label, (x1, y1 - base),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, TEXT_COLOR, 2, cv2.LINE_AA)
 
     cv2.putText(image, f"Detections: {len(detections)}", (10, 30),
@@ -64,13 +70,15 @@ def draw_faces(image: np.ndarray,
                faces: List[FaceDetection]) -> np.ndarray:
     """Рисует боксы лиц и 5 ключевых точек."""
     for f in faces:
-        cv2.rectangle(image, (f.x1, f.y1), (f.x2, f.y2), FACE_COLOR, 2)
+        x1, y1 = int(f.x1), int(f.y1)
+        x2, y2 = int(f.x2), int(f.y2)
+
+        cv2.rectangle(image, (x1, y1), (x2, y2), FACE_COLOR, 2)
 
         label = f"face {f.score:.2f}"
         (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.rectangle(image, (f.x1, f.y1 - th - base),
-                      (f.x1 + tw, f.y1), FACE_COLOR, -1)
-        cv2.putText(image, label, (f.x1, f.y1 - base),
+        cv2.rectangle(image, (x1, y1 - th - base), (x1 + tw, y1), FACE_COLOR, -1)
+        cv2.putText(image, label, (x1, y1 - base),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, TEXT_COLOR, 1, cv2.LINE_AA)
 
         for (lx, ly) in f.landmarks:

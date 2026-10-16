@@ -17,6 +17,7 @@ MODEL_DIR = "yolo_tiny"
 WEIGHTS   = os.path.join(MODEL_DIR, "yolov4-tiny.weights")
 CONFIG    = os.path.join(MODEL_DIR, "yolov4-tiny.cfg")
 NAMES     = os.path.join(MODEL_DIR, "coco.names")
+ONNX_MODEL = os.path.join(MODEL_DIR, "yolov4-tiny.onnx")
 
 INPUT_SIZE      = (416, 416)
 DEFAULT_CONF    = 0.4
@@ -49,6 +50,15 @@ class Detection:
     class_id: int
     score: float
     class_name: str = ""
+
+    def __post_init__(self):
+        # Приводим всё к питоновским типам:
+        #   - cv2.rectangle не принимает numpy.int64 / numpy.float32
+        #   - json.dump не сериализует numpy-числа
+        # Делаем это один раз здесь — и больше нигде не беспокоимся.
+        self.box = tuple(int(v) for v in self.box)
+        self.class_id = int(self.class_id)
+        self.score = float(self.score)
 
     @property
     def x1(self): return self.box[0]
@@ -146,10 +156,14 @@ class YoloDetector:
                 bw = bw.astype(int)
                 bh = bh.astype(int)
 
+                # Явная конвертация в питоновские int — страховка,
+                # хотя __post_init__ в Detection всё равно приведёт типы.
                 per_image_boxes[b].extend(
-                    np.stack([x, y, bw, bh], axis=1).tolist())
-                per_image_scores[b].extend(sc.tolist())
-                per_image_class_ids[b].extend(cls.tolist())
+                    [(int(a), int(b_), int(c), int(d_))
+                     for a, b_, c, d_ in
+                     np.stack([x, y, bw, bh], axis=1).tolist()])
+                per_image_scores[b].extend(float(s) for s in sc.tolist())
+                per_image_class_ids[b].extend(int(c) for c in cls.tolist())
 
         wanted = self._filter_class_ids()
         results: List[List[Detection]] = []

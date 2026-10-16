@@ -25,7 +25,7 @@ from cli_utils import (
 )
 from detector import (
     YoloDetector, Detection,
-    WEIGHTS, CONFIG, NAMES,
+    WEIGHTS, CONFIG, NAMES, ONNX_MODEL,
     INPUT_SIZE, DEFAULT_CONF, DEFAULT_NMS, DEFAULT_CLASSES, CLASS_PRESETS,
 )
 from drawing import draw_detections, draw_faces, browse_results
@@ -87,6 +87,9 @@ def build_parser():
     p.add_argument("--nms", type=float, default=DEFAULT_NMS)
     p.add_argument("--classes", nargs="+", default=list(DEFAULT_CLASSES))
     p.add_argument("--preset", choices=list(CLASS_PRESETS.keys()))
+    p.add_argument("--backend", choices=["opencv", "onnx"],
+                   default="opencv",
+                   help="бэкенд инференса (opencv DNN или onnxruntime)")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--cuda", action="store_true")
     p.add_argument("--show", action="store_true")
@@ -168,6 +171,7 @@ def main():
             "YOLO config":  CONFIG,
             "YOLO names":   NAMES,
             "YuNet model":  DEFAULT_MODEL,
+            "ONNX model":   ONNX_MODEL,
         })
         sys.exit(code)
 
@@ -186,13 +190,27 @@ def main():
     else:
         classes = tuple(args.classes)
 
-    detector = YoloDetector(
-        WEIGHTS, CONFIG, NAMES,
-        conf_threshold=args.conf,
-        nms_threshold=args.nms,
-        classes_of_interest=classes,
-        use_cuda=args.cuda,
-    )
+    if args.backend == "onnx":
+        from onnx_detector import OnnxDetector
+        detector = OnnxDetector(
+            model_path=ONNX_MODEL,
+            names_path=NAMES,
+            input_size=INPUT_SIZE,
+            conf_threshold=args.conf,
+            nms_threshold=args.nms,
+            classes_of_interest=classes,
+            use_cuda=args.cuda,
+        )
+        logger.info(f"Бэкенд: onnx ({ONNX_MODEL})")
+    else:
+        detector = YoloDetector(
+            WEIGHTS, CONFIG, NAMES,
+            conf_threshold=args.conf,
+            nms_threshold=args.nms,
+            classes_of_interest=classes,
+            use_cuda=args.cuda,
+        )
+        logger.info(f"Бэкенд: opencv DNN ({WEIGHTS})")
 
     files = collect_images(args.inputs)
     if not files:
