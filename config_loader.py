@@ -30,6 +30,12 @@ CONFIG_KEY_MAP = {
     "verbose":      "verbose",
     "cuda":         "cuda",
     "inputs":       "inputs",
+    "video":         "video",
+    "webcam":        "webcam",
+    "save_video":    "save_video",
+    "save_every":    "save_every",
+    "infer_every":   "infer_every",
+    "max_frames":    "max_frames",
     
 }
 

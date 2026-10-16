@@ -95,6 +95,18 @@ def build_parser():
                         "в пикселях (0 = выключено, рекомендуем 640)")
     p.add_argument("--tile-overlap", type=int, default=128,
                    help="перекрытие плиток при тайлинге (по умолчанию 128)")
+    p.add_argument("--video", default=None, metavar="PATH",
+                   help="путь к видеофайлу или RTSP-потоку")
+    p.add_argument("--webcam", type=int, default=None, metavar="INDEX",
+                   help="индекс веб-камеры (0, 1, ...) — включает видео-режим")
+    p.add_argument("--save-video", default=None, metavar="PATH",
+                   help="сохранить аннотированное видео")
+    p.add_argument("--save-every", type=int, default=0,
+                   help="сохранять каждый N-й кадр в output/frames")
+    p.add_argument("--infer-every", type=int, default=1,
+                   help="инференс раз в N кадров (ускорение для видео)")
+    p.add_argument("--max-frames", type=int, default=0,
+                   help="остановиться после N кадров (0 = без лимита)")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--cuda", action="store_true")
     p.add_argument("--show", action="store_true")
@@ -247,6 +259,31 @@ def main():
         except FileNotFoundError as e:
             logger.warning(str(e))
             logger.warning("--faces игнорируется")
+    
+        # --- Видео-режим: --video или --webcam ---
+    video_source = None
+    if args.webcam is not None:
+        video_source = args.webcam
+    elif args.video is not None:
+        video_source = args.video
+
+    if video_source is not None:
+        from video_processor import process_video
+        stats = process_video(
+            detector=detector,
+            source=video_source,
+            face_detector=face_detector,
+            output_video=args.save_video,
+            show=not args.quiet and args.show,
+            save_every=args.save_every,
+            save_frames_dir=os.path.join(args.output_dir, "frames"),
+            infer_every=args.infer_every,
+            max_frames=args.max_frames,
+        )
+        print(f"\nВидео: кадров={stats.frames}  "
+              f"детекций={stats.detections}  лиц={stats.faces}  "
+              f"средний FPS={stats.fps_avg:.1f}")
+        return
 
     # --- JSON-отчёт ---
     report = ReportBuilder(meta=ReportMeta(
